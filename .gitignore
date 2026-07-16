@@ -1,0 +1,12 @@
+# Data artifacts — never commit catalog downloads or built binaries
+*.csv.gz
+*.parquet
+data/
+
+# Build / deps
+dist/
+node_modules/
+__pycache__/
+
+# Secrets
+.env

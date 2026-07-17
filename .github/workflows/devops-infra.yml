@@ -5,8 +5,9 @@ name: "DevOps: Infrastructure"
 #   - Adds app CNAME in Cloudflare → CloudFront
 #   - Sets GitHub Variables (CLOUDFRONT_DIST_ID, S3_BUCKET)
 #
-# Required GitHub Secrets (all set by scripts/bootstrap.sh):
-#   TERRAFORM_AWS_ACCESS_KEY_ID / TERRAFORM_AWS_SECRET_ACCESS_KEY
+# Auth: GitHub OIDC → assumes the stars-terraform role. No AWS keys in Secrets.
+#
+# Required GitHub Secrets (all set by scripts/bootstrap-oidc.ps1):
 #   TF_STATE_BUCKET
 #   TF_VAR_APP_NAME, TF_VAR_ENVIRONMENT, TF_VAR_CUSTOM_DOMAIN
 #   CLOUDFLARE_ZONE_ID, CLOUDFLARE_API_TOKEN
@@ -26,6 +27,10 @@ concurrency:
 env:
   AWS_DEFAULT_REGION: us-west-2
 
+permissions:
+  id-token: write   # OIDC token for AWS role assumption
+  contents: read
+
 jobs:
   infra:
     runs-on: ubuntu-latest
@@ -35,11 +40,13 @@ jobs:
       s3_bucket:      ${{ steps.out.outputs.s3_bucket }}
       acm_cname_name: ${{ steps.out.outputs.acm_cname_name }}
       acm_cname_value: ${{ steps.out.outputs.acm_cname_value }}
-    env:
-      AWS_ACCESS_KEY_ID:     ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::491696534851:role/stars-terraform
+          aws-region: us-west-2
 
       - uses: hashicorp/setup-terraform@v3
         with:

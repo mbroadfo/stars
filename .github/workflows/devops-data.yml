@@ -7,8 +7,7 @@ name: "DevOps: Star Catalog"
 #
 # Triggers: manual (workflow_dispatch) or a change to pipeline/**.
 #
-# Required GitHub Secrets:
-#   DEPLOY_AWS_ACCESS_KEY_ID / DEPLOY_AWS_SECRET_ACCESS_KEY
+# Auth: GitHub OIDC → assumes the stars-ci role. No AWS keys in Secrets.
 #
 # Required GitHub Variables (auto-set by devops-infra.yml):
 #   S3_BUCKET, CLOUDFRONT_DIST_ID
@@ -27,14 +26,20 @@ concurrency:
 env:
   AWS_DEFAULT_REGION: us-west-2
 
+permissions:
+  id-token: write   # OIDC token for AWS role assumption
+  contents: read
+
 jobs:
   build-and-sync:
     runs-on: ubuntu-latest
-    env:
-      AWS_ACCESS_KEY_ID:     ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
     steps:
       - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::491696534851:role/stars-ci
+          aws-region: us-west-2
 
       - uses: actions/setup-python@v5
         with:

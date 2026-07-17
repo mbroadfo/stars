@@ -90,8 +90,14 @@ Architecture decisions (first consumer of spa-on-aws):
   `data/*` from its `--delete` — the catalog survives frontend deploys.
 - CloudFront gets a dedicated `/data/*` behavior: 1-day edge TTL (the buffer
   isn't content-hashed), refreshed by invalidation on data sync.
-- One-time setup: `scripts/bootstrap.sh` (from the template) creates the TF
-  state bucket, `stars-terraform` + `stars-ci` IAM users, and GitHub Secrets.
+- **OIDC federation instead of stored AWS keys** (upgrade over the template's
+  IAM-user pattern): workflows assume short-lived roles `stars-terraform`
+  (scoped: state+assets S3, CloudFront, ACM — no AdministratorAccess) and
+  `stars-ci` (assets sync + invalidation only), trust-pinned to
+  `repo:mbroadfo/stars:ref:refs/heads/master`. Zero AWS credentials in GitHub
+  Secrets. One-time setup: `scripts/bootstrap-oidc.ps1` (PowerShell, run under
+  a temporary admin key) creates the state bucket, OIDC provider, both roles,
+  and 7 GitHub Secrets (Cloudflare pair, GH token, TF config).
 
 Gate: `https://stars.xaminisalamini.com` serves the atlas with the SHA-verified
 catalog; a `git push` touching only `web/` redeploys without touching data.

@@ -58,7 +58,16 @@ header row** — reuse part 1's columns). Profile: 2,551,745 rows; 2,491,328 wit
 Gate: round-trip test reloads the buffer, count ≈ 123,018 (document exact),
 Sirius/Vega positions spot-checked against prototype values.
 
-### S2 — Web viewer
+### S2 — Web viewer ✅
+
+Gate passed 2026-07-17: steady **60 fps @ 123,018 stars** (headless Chrome on the
+RTX 4070, sampled in neighborhood and whole-galaxy views). Prototype promoted to
+`web/` (Vite + React + Three.js, custom orbit kept, single interleaved-buffer draw
+call, size from mag + color from B−V in shader). Instruments verified end-to-end:
+Sirius→Vega tether = 33.17 ly, closing 17.5 km/s from **full 3D velocities** (the
+prototype's radial-only caveat is gone), 1 g brief = 7 ship yr / 35.1 Earth yr /
+γ 18.12. Picking and labels limited to named + mag ≤ 3 stars by design. Data served
+from `web/public/data/` (gitignored) — `npm run sync-data` copies pipeline output.
 
 `web/`: Vite + React + Three.js. Prototype promoted; star buffer fetched; shader
 point rendering. Gate: 60 fps @ 123k stars.

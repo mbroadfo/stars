@@ -1,0 +1,70 @@
+name: "DevOps: Frontend"
+# Adapted from mbroadfo/spa-on-aws. Builds the Vite SPA from web/ and deploys
+# to S3 + CloudFront. The star catalog under /data/ is owned by devops-data.yml
+# — this workflow never writes or deletes it.
+#
+# Required GitHub Secrets:
+#   DEPLOY_AWS_ACCESS_KEY_ID / DEPLOY_AWS_SECRET_ACCESS_KEY
+#
+# Required GitHub Variables (auto-set by devops-infra.yml on first infra apply):
+#   S3_BUCKET, CLOUDFRONT_DIST_ID
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'web/**'
+  workflow_dispatch:
+
+concurrency:
+  group: devops-frontend
+  cancel-in-progress: true
+
+env:
+  AWS_DEFAULT_REGION: us-west-2
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID:     ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install and build
+        working-directory: web
+        run: npm install && npm run build
+
+      # Sync Vite-hashed assets first — 1-year immutable cache, no --delete
+      # (old hashed filenames safe to keep; may still be referenced by cached pages)
+      - name: Sync assets to S3
+        run: |
+          aws s3 sync web/dist/assets/ \
+            s3://${{ vars.S3_BUCKET }}/assets/ \
+            --cache-control "public,max-age=31536000,immutable"
+
+      # Sync everything else (HTML, root files) — no-cache, delete stale files.
+      # data/* is excluded: the star catalog lives only in S3, synced by
+      # devops-data.yml, and must survive frontend deploys.
+      - name: Sync HTML and root files to S3
+        run: |
+          aws s3 sync web/dist/ \
+            s3://${{ vars.S3_BUCKET }}/ \
+            --exclude "assets/*" \
+            --exclude "data/*" \
+            --delete \
+            --cache-control "no-cache"
+
+      # Only index.html needs invalidation — hashed assets never need it
+      - name: Invalidate CloudFront index
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DIST_ID }} \
+            --paths "/index.html"

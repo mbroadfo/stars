@@ -1,0 +1,62 @@
+name: "DevOps: Star Catalog"
+# Rebuilds the Tier 1 star catalog from the AT-HYG source on the runner,
+# verifies it with the S1 round-trip gate (count, SHA-256, Sirius/Vega
+# spot-check), and only then syncs it to s3://{bucket}/data/tier1/.
+# The pipeline is deterministic — the runner's output is byte-identical to
+# the gate-tested build (pipeline/build_tier1.py sorts by catalog id).
+#
+# Triggers: manual (workflow_dispatch) or a change to pipeline/**.
+#
+# Required GitHub Secrets:
+#   DEPLOY_AWS_ACCESS_KEY_ID / DEPLOY_AWS_SECRET_ACCESS_KEY
+#
+# Required GitHub Variables (auto-set by devops-infra.yml):
+#   S3_BUCKET, CLOUDFRONT_DIST_ID
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'pipeline/**'
+  workflow_dispatch:
+
+concurrency:
+  group: devops-data
+  cancel-in-progress: false
+
+env:
+  AWS_DEFAULT_REGION: us-west-2
+
+jobs:
+  build-and-sync:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID:     ${{ secrets.DEPLOY_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.DEPLOY_AWS_SECRET_ACCESS_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pipeline dependencies
+        run: pip install pandas numpy
+
+      - name: Build Tier 1 catalog (downloads AT-HYG source, ~200 MB)
+        run: python pipeline/build_tier1.py --force
+
+      - name: Round-trip gate test
+        run: python pipeline/test_tier1.py
+
+      - name: Sync catalog to S3
+        run: |
+          aws s3 sync pipeline/data/tier1/ \
+            s3://${{ vars.S3_BUCKET }}/data/tier1/ \
+            --cache-control "public,max-age=86400"
+
+      - name: Invalidate CloudFront /data/*
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DIST_ID }} \
+            --paths "/data/*"

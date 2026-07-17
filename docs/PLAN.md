@@ -74,7 +74,27 @@ point rendering. Gate: 60 fps @ 123k stars.
 
 ### S3 — Deploy
 
-S3 + CloudFront static hosting via GitHub Actions (same pattern as the Reef project).
+S3 + CloudFront static hosting via GitHub Actions, adapted from the
+[spa-on-aws](https://github.com/mbroadfo/spa-on-aws) template (static-only path:
+no Lambda/API Gateway). Target: `https://stars.xaminisalamini.com` (Cloudflare
+DNS, ACM cert), app `stars`, bucket `stars-assets`, region us-west-2.
+
+Architecture decisions (first consumer of spa-on-aws):
+
+- **S3 is the system of record for the star catalog; git for code.** The
+  catalog is NOT committed — `devops-data.yml` rebuilds it from AT-HYG on the
+  runner (deterministic, ~5 min), runs the S1 round-trip gate, and only on pass
+  syncs to `s3://{bucket}/data/tier1/` + invalidates `/data/*`. Triggered
+  manually or on `pipeline/**` changes. Scales unchanged to the S6 full catalog.
+- `devops-frontend.yml` (on `web/**`) builds and syncs the app but excludes
+  `data/*` from its `--delete` — the catalog survives frontend deploys.
+- CloudFront gets a dedicated `/data/*` behavior: 1-day edge TTL (the buffer
+  isn't content-hashed), refreshed by invalidation on data sync.
+- One-time setup: `scripts/bootstrap.sh` (from the template) creates the TF
+  state bucket, `stars-terraform` + `stars-ci` IAM users, and GitHub Secrets.
+
+Gate: `https://stars.xaminisalamini.com` serves the atlas with the SHA-verified
+catalog; a `git push` touching only `web/` redeploys without touching data.
 
 ### S4 — Time scrub
 

@@ -136,7 +136,7 @@ resource "aws_acm_certificate" "spa" {
 resource "aws_acm_certificate_validation" "spa" {
   provider                = aws.us_east_1
   certificate_arn         = aws_acm_certificate.spa.arn
-  validation_record_fqdns = [for r in aws_acm_certificate.spa.domain_validation_options : r.resource_record_name]
+  validation_record_fqdns = [for r in cloudflare_record.acm_validation : r.hostname]
 }
 
 # ── CloudFront cache policy for star catalog data ────────────────────────────

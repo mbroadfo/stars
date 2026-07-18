@@ -17,13 +17,3 @@ output "s3_bucket_name" {
   description = "S3 bucket name for SPA assets — set as S3_BUCKET GitHub Variable"
   value       = aws_s3_bucket.spa.id
 }
-
-output "acm_validation_cname_name" {
-  description = "CNAME record name to add to your DNS provider for ACM validation"
-  value       = tolist(aws_acm_certificate.spa.domain_validation_options)[0].resource_record_name
-}
-
-output "acm_validation_cname_value" {
-  description = "CNAME record value to add to your DNS provider for ACM validation"
-  value       = tolist(aws_acm_certificate.spa.domain_validation_options)[0].resource_record_value
-}

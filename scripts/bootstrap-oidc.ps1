@@ -1,4 +1,4 @@
-# bootstrap-oidc.ps1 — One-time OIDC setup for STARS deploys. Idempotent.
+﻿# bootstrap-oidc.ps1 — One-time OIDC setup for STARS deploys. Idempotent.
 #
 # Replaces the spa-on-aws bootstrap.sh (long-lived IAM user keys) with GitHub
 # Actions OIDC federation: workflows assume short-lived roles; NO AWS
@@ -28,13 +28,36 @@ param(
     [string]$Branch      = "master",
     [string]$CfZoneId    = "cec0f3ca3468209e2b18e7fc66aa528c",
     [string]$CfToken     = "",
-    [string]$GhToken     = ""
+    [string]$GhToken     = "",
+    [switch]$Force
 )
 
 $ErrorActionPreference = "Stop"
 
-if (-not $CfToken) { $CfToken = (Read-Host "Cloudflare API token (Zone:DNS:Edit)").Trim() }
-if (-not $CfToken) { throw "Cloudflare token is required." }
+# Probe an aws CLI call that is EXPECTED to fail sometimes (e.g. head-bucket on
+# a missing bucket). PS 5.1 turns native stderr into a terminating error under
+# EAP=Stop, so relax it for the duration and just report the exit code.
+function Test-Aws {
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try { & aws @args 2>&1 | Out-Null } catch { }
+    $ErrorActionPreference = $eap
+    return ($LASTEXITCODE -eq 0)
+}
+
+$CfToken = $CfToken.Trim()
+if ($CfToken) {
+    try {
+        $verify = Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/user/tokens/verify" `
+            -Headers @{ Authorization = "Bearer $CfToken" }
+        if (-not $verify.success) { throw "verify returned success=false" }
+        Write-Host "Cloudflare token verified (status: $($verify.result.status))"
+    } catch {
+        throw "Cloudflare token failed verification — copy it again from the dashboard. ($_)"
+    }
+} else {
+    Write-Warning "No Cloudflare token — CLOUDFLARE_API_TOKEN will NOT be set. Re-run with -CfToken later (script is idempotent)."
+}
 if (-not $GhToken) { $GhToken = (gh auth token).Trim() }
 if (-not $GhToken) { throw "No GitHub token — run 'gh auth login' first." }
 
@@ -54,13 +77,14 @@ Write-Host "Roles:       $App-terraform, $App-ci"
 Write-Host "Repo:        $GithubRepo"
 Write-Host ""
 if ($identity.Account -ne $AccountId) { throw "Profile is in account $($identity.Account), expected $AccountId" }
-$confirm = Read-Host "Proceed? [y/N]"
-if ($confirm -notmatch "^[Yy]$") { Write-Host "Aborted."; exit 0 }
+if (-not $Force) {
+    $confirm = Read-Host "Proceed? [y/N]"
+    if ($confirm -notmatch "^[Yy]$") { Write-Host "Aborted."; exit 0 }
+}
 
 # ── 1. Terraform state bucket ────────────────────────────────────────────────
 Write-Host "`n[1/5] Terraform state bucket: $TfBucket"
-aws s3api head-bucket --bucket $TfBucket 2>$null
-if ($LASTEXITCODE -eq 0) {
+if (Test-Aws s3api head-bucket --bucket $TfBucket) {
     Write-Host "      Already exists"
 } else {
     aws s3 mb "s3://$TfBucket" --region $Region | Out-Null
@@ -102,8 +126,7 @@ $trustFile = New-TemporaryFile
 Set-Content -Path $trustFile -Value $trust -Encoding ascii
 
 function Ensure-Role([string]$Name, [string]$PolicyJson) {
-    aws iam get-role --role-name $Name 2>$null | Out-Null
-    if ($LASTEXITCODE -eq 0) {
+    if (Test-Aws iam get-role --role-name $Name) {
         aws iam update-assume-role-policy --role-name $Name --policy-document "file://$trustFile"
         Write-Host "      Role exists — trust policy refreshed"
     } else {
@@ -169,9 +192,9 @@ $secrets = [ordered]@{
     "TF_VAR_ENVIRONMENT"    = $Environment
     "TF_VAR_CUSTOM_DOMAIN"  = $Domain
     "CLOUDFLARE_ZONE_ID"    = $CfZoneId
-    "CLOUDFLARE_API_TOKEN"  = $CfToken
     "GH_TOKEN"              = $GhToken
 }
+if ($CfToken) { $secrets["CLOUDFLARE_API_TOKEN"] = $CfToken }
 foreach ($k in $secrets.Keys) {
     Write-Host "      $k"
     $secrets[$k] | gh secret set $k --repo $GithubRepo

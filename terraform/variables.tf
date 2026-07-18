@@ -19,6 +19,17 @@ variable "custom_domain" {
   type        = string
 }
 
+variable "cloudflare_zone_id" {
+  description = "Cloudflare zone ID for the domain"
+  type        = string
+}
+
+variable "cloudflare_api_token" {
+  description = "Cloudflare API token with Zone:DNS:Edit on the zone"
+  type        = string
+  sensitive   = true
+}
+
 variable "price_class" {
   description = "CloudFront price class — PriceClass_100 (US+EU), PriceClass_200 (+Asia), PriceClass_All"
   default     = "PriceClass_100"

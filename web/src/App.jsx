@@ -1,6 +1,6 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import * as THREE from "three";
-import { loadCatalog, getStar, STRIDE, CI_SENTINEL } from "./lib/catalog.js";
+import { loadCatalog, loadFarField, getStar, STRIDE, CI_SENTINEL } from "./lib/catalog.js";
 import { journey, closureRate, separationLy, fmt, fmtYears, KM_PER_LY } from "./lib/physics.js";
 import { ciToRgb, rgbToCss } from "./lib/color.js";
 
@@ -27,6 +27,7 @@ export default function App() {
   const [accel, setAccel] = useState(1);
   const [camDist, setCamDist] = useState(60);
   const [fps, setFps] = useState(0);
+  const [farCount, setFarCount] = useState(0);
   const [showHelp, setShowHelp] = useState(true);
 
   useEffect(() => {
@@ -107,34 +108,64 @@ export default function App() {
     }
     const starAt = (i) => getStar(cat, i);
 
-    // --- Procedural Milky Way (context, ~100k ly across — illustrative) ---
-    const GAL_R = 52000, GAL_CENTER = new THREE.Vector3(26660, 0, 0);
-    const gN = 24000;
-    const gPos = new Float32Array(gN * 3), gCol = new Float32Array(gN * 3);
-    const cIn = new THREE.Color("#ffd9a0"), cOut = new THREE.Color("#8fa8ff");
-    for (let i = 0; i < gN; i++) {
-      const arm = i % 4;
-      const rr = Math.pow(Math.random(), 1.6) * GAL_R;
-      const spin = rr * 0.00028;
-      const ang = spin + (arm * Math.PI) / 2 + (Math.random() - 0.5) * (0.9 - 0.5 * (rr / GAL_R));
-      const bulge = Math.exp(-rr / 6000);
-      const thick = 260 + bulge * 2200;
-      const x = Math.cos(ang) * rr + (Math.random() - 0.5) * 1300;
-      const z = Math.sin(ang) * rr + (Math.random() - 0.5) * 1300;
-      const y = (Math.random() + Math.random() + Math.random() - 1.5) * thick * 0.66;
-      gPos.set([GAL_CENTER.x + x, y, GAL_CENTER.z + z], i * 3);
-      const c = cIn.clone().lerp(cOut, Math.min(1, rr / GAL_R + Math.random() * 0.15));
-      const dim = 0.35 + bulge * 0.65;
-      gCol.set([c.r * dim, c.g * dim, c.b * dim], i * 3);
-    }
-    const galGeo = new THREE.BufferGeometry();
-    galGeo.setAttribute("position", new THREE.BufferAttribute(gPos, 3));
-    galGeo.setAttribute("color", new THREE.BufferAttribute(gCol, 3));
-    const galMat = new THREE.PointsMaterial({
-      size: 2, sizeAttenuation: false, vertexColors: true,
-      transparent: true, opacity: 0.75, depthWrite: false, blending: THREE.AdditiveBlending,
-    });
-    scene.add(new THREE.Points(galGeo, galMat));
+    // --- Far field: REAL stars 3,000–50,000 ly out (Tier 2), loaded lazily.
+    // Replaces the old procedural pinwheel: every point here is a measured
+    // star. The cloud is lopsided and fades with distance — that's honest:
+    // dust hides the far side of the galaxy from every survey.
+    s.disposed = false;
+    loadFarField(cat)
+      .then((far) => {
+        if (!far || s.disposed) return;
+        const inter2 = new THREE.InterleavedBuffer(far.data, 5);
+        const col2 = new Float32Array(far.count * 3);
+        for (let i = 0; i < far.count; i++) {
+          const [r, g, b] = ciToRgb(far.data[i * 5 + 4], CI_SENTINEL);
+          col2[i * 3] = r; col2[i * 3 + 1] = g; col2[i * 3 + 2] = b;
+        }
+        const geo2 = new THREE.BufferGeometry();
+        geo2.setAttribute("position", new THREE.InterleavedBufferAttribute(inter2, 3, 0));
+        geo2.setAttribute("absmag", new THREE.InterleavedBufferAttribute(inter2, 1, 3));
+        geo2.setAttribute("color", new THREE.BufferAttribute(col2, 3));
+        const mat2 = new THREE.ShaderMaterial({
+          transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
+          vertexShader: `
+            attribute float absmag; varying vec3 vColor;
+            void main(){ vColor=color; vec4 mv=modelViewMatrix*vec4(position,1.0);
+              gl_PointSize=clamp(3.2-0.35*absmag,1.0,5.0);
+              gl_Position=projectionMatrix*mv; }`,
+          fragmentShader: `
+            varying vec3 vColor;
+            void main(){ vec2 uv=gl_PointCoord-0.5; float d=length(uv);
+              float a=smoothstep(0.5,0.05,d)*0.5; if(a<0.02) discard;
+              gl_FragColor=vec4(vColor,a); }`,
+        });
+        const farPoints = new THREE.Points(geo2, mat2);
+        farPoints.frustumCulled = false;
+        scene.add(farPoints);
+        setFarCount(far.count);
+      })
+      .catch((e) => console.warn("far field unavailable:", e));
+
+    // --- Ghost outline of the Milky Way — illustrative guide, not data.
+    // Dashed rings mark the ~100k ly disk edge and the bulge region so the
+    // real data sits in context without a fake star field around it.
+    const GAL_CENTER = new THREE.Vector3(26660, 0, 0);
+    const mkDashedRing = (radius, dash, gap, opacity) => {
+      const pts = [];
+      for (let a = 0; a <= 256; a++) {
+        const t = (a / 256) * Math.PI * 2;
+        pts.push(new THREE.Vector3(
+          GAL_CENTER.x + Math.cos(t) * radius, 0, GAL_CENTER.z + Math.sin(t) * radius));
+      }
+      const g = new THREE.BufferGeometry().setFromPoints(pts);
+      const line = new THREE.Line(g, new THREE.LineDashedMaterial({
+        color: 0x5a6a8f, transparent: true, opacity, dashSize: dash, gapSize: gap, depthWrite: false,
+      }));
+      line.computeLineDistances();
+      return line;
+    };
+    scene.add(mkDashedRing(52000, 2600, 1800, 0.45)); // disk edge
+    scene.add(mkDashedRing(9800, 900, 700, 0.3));     // bulge region
 
     // --- Sun marker (rides the same shader; mag -2 renders as a bright core) ---
     const sunGeo = new THREE.BufferGeometry();
@@ -201,6 +232,7 @@ export default function App() {
     };
     const sunLabel = mkTag("SUN", "#ffe9b8");
     const sgrLabel = mkTag("SGR A* · GALACTIC CENTER · 26,000 ly", "#c9a3ff");
+    const edgeLabel = mkTag("MILKY WAY EDGE · ~100,000 LY ACROSS · OUTLINE ILLUSTRATIVE", "#5a6a8f");
     const ringLabels = ringRadii.map((r) => mkTag(r.toLocaleString() + " ly", "#5a6a8f"));
 
     // ---------------- Interaction ----------------
@@ -367,6 +399,8 @@ export default function App() {
       sunLabel.style.display = dense < 200000 ? sunLabel.style.display : "none";
       projTag(sgrLabel, GAL_CENTER);
       if (dense < 3000) sgrLabel.style.display = "none";
+      projTag(edgeLabel, labelPos.set(GAL_CENTER.x, 0, -52000));
+      if (dense < 18000) edgeLabel.style.display = "none";
       ringLabels.forEach((rl, i) => {
         const r = ringRadii[i];
         if (dense < r * 0.35 || dense > r * 30) { rl.style.display = "none"; return; }
@@ -397,6 +431,7 @@ export default function App() {
     ro.observe(mount);
 
     return () => {
+      s.disposed = true;
       cancelAnimationFrame(raf); ro.disconnect();
       el.removeEventListener("mousedown", onDown);
       window.removeEventListener("mousemove", onMove);
@@ -485,7 +520,7 @@ export default function App() {
         <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.22em", marginTop: 2 }}>A NAVIGABLE ATLAS · 1 UNIT = 1 LIGHT-YEAR</div>
         <div style={{ ...mono, fontSize: 11, color: "#8fa0c0", marginTop: 8 }}>
           {cat ? <>
-            {cat.count.toLocaleString()} stars · AT-HYG v3.2<br />
+            {cat.count.toLocaleString()} stars{farCount > 0 && <> + {farCount.toLocaleString()} far-field</>} · AT-HYG v3.2<br />
             viewing <span style={{ color: "#dfe6f2" }}>{scaleLabel}</span><br />
             camera {fmt(camDist, camDist < 100 ? 1 : 0)} ly from focus · {fps} fps
           </> : loadError ? (
@@ -586,7 +621,7 @@ export default function App() {
 
       {/* Credits */}
       <div style={{ position: "absolute", bottom: 8, right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
-        positions &amp; velocities: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · galaxy backdrop is illustrative
+        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative
       </div>
     </div>
   );

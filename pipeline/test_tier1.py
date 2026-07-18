@@ -83,6 +83,27 @@ def main() -> None:
         f"min {dist.min():.2f} ly",
     )
 
+    print("[tier2 far field]")
+    t2 = manifest.get("tier2")
+    if t2:
+        far_buf = (OUT_DIR / t2["file"]).read_bytes()
+        ok &= check("tier2 byte length", len(far_buf) == t2["bytes"], f"{len(far_buf):,} bytes")
+        ok &= check(
+            "tier2 sha256",
+            hashlib.sha256(far_buf).hexdigest() == t2["sha256"], t2["sha256"][:16],
+        )
+        far = np.frombuffer(far_buf, dtype="<f4").reshape(-1, 5)
+        ok &= check("tier2 count vs manifest", len(far) == t2["count"], f"{len(far):,} stars")
+        ok &= check("tier2 all finite", bool(np.isfinite(far).all()))
+        fdist = np.linalg.norm(far[:, 0:3].astype("float64"), axis=1)
+        ok &= check(
+            "tier2 range 3k-50k ly",
+            bool(((fdist > 2900) & (fdist < 51000)).all()),
+            f"min {fdist.min():,.0f}, max {fdist.max():,.0f} ly",
+        )
+    else:
+        ok &= check("tier2 present in manifest", False)
+
     print("[spot-check vs prototype]")
     by_name = {v["name"]: int(k) for k, v in names.items()}
     for name, (ra_h, dec_deg, dist_ly) in PROTOTYPE_STARS.items():

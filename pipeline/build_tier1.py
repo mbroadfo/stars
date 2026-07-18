@@ -54,13 +54,16 @@ EQ2GAL = np.array(
 # Missing color index sentinel (documented in manifest.json).
 CI_SENTINEL = 99.0
 
-USECOLS = ["id", "proper", "spect", "mag", "ci", "x0", "y0", "z0", "vx", "vy", "vz"]
+USECOLS = ["id", "proper", "spect", "mag", "absmag", "ci", "dist",
+           "x0", "y0", "z0", "vx", "vy", "vz"]
 DTYPES = {
     "id": "int64",
     "proper": "string",
     "spect": "string",
     "mag": "float64",
+    "absmag": "float64",
     "ci": "float64",
+    "dist": "float64",
     "x0": "float64",
     "y0": "float64",
     "z0": "float64",
@@ -68,6 +71,14 @@ DTYPES = {
     "vy": "float64",
     "vz": "float64",
 }
+
+# Tier 2 far field: real catalog stars beyond the Tier 1 bubble, out to the
+# edge of usable distances. All stars past FAR_KEEP_ALL ly are kept; the dense
+# inner band is deterministically thinned (every Nth by catalog id).
+FAR_MIN_LY = 3_000.0
+FAR_KEEP_ALL_LY = 10_000.0
+FAR_MAX_LY = 50_000.0
+FAR_INNER_STRIDE = 6  # keep 1-in-6 of the 3k-10k ly band
 
 
 def download(url: str, dest: Path) -> None:
@@ -127,13 +138,39 @@ def build(df: pd.DataFrame) -> tuple[np.ndarray, pd.DataFrame]:
     return packed, culled
 
 
-def write_outputs(packed: np.ndarray, culled: pd.DataFrame) -> None:
+def build_far_field(df: pd.DataFrame) -> np.ndarray:
+    """Real stars beyond the Tier 1 bubble: scene x,y,z + absmag + ci, 20 B/star."""
+    dist_ly = df["dist"] * PC_TO_LY
+    ok = (
+        df[["x0", "y0", "z0"]].notna().all(axis=1)
+        & df["absmag"].notna()
+        & (dist_ly > FAR_MIN_LY)
+        & (dist_ly < FAR_MAX_LY)
+    )
+    far = df[ok].sort_values("id", kind="mergesort").reset_index(drop=True)
+    inner = far["dist"] * PC_TO_LY <= FAR_KEEP_ALL_LY
+    keep = ~inner | (np.arange(len(far)) % FAR_INNER_STRIDE == 0)
+    far = far[keep]
+    print(f"  far field: {int(ok.sum()):,} in range -> {len(far):,} after thinning "
+          f"(all beyond {FAR_KEEP_ALL_LY:,.0f} ly kept)")
+
+    pos_gal = (far[["x0", "y0", "z0"]].to_numpy() * PC_TO_LY) @ EQ2GAL.T
+    scene = np.column_stack([pos_gal[:, 0], pos_gal[:, 2], -pos_gal[:, 1]])
+    ci = far["ci"].to_numpy(dtype="float64", na_value=CI_SENTINEL)
+    return np.column_stack([scene, far["absmag"].to_numpy(), ci]).astype("<f4")
+
+
+def write_outputs(packed: np.ndarray, culled: pd.DataFrame, far: np.ndarray) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     bin_path = OUT_DIR / "tier1.bin"
     buf = packed.tobytes()
     bin_path.write_bytes(buf)
     sha = hashlib.sha256(buf).hexdigest()
+
+    far_buf = far.tobytes()
+    (OUT_DIR / "tier2.bin").write_bytes(far_buf)
+    far_sha = hashlib.sha256(far_buf).hexdigest()
 
     named = culled[culled["proper"].notna()]
     names = {
@@ -161,14 +198,29 @@ def write_outputs(packed: np.ndarray, culled: pd.DataFrame) -> None:
         "ci_missing_count": int((culled["ci"].isna()).sum()),
         "named_count": len(names),
         "sort": "ascending AT-HYG catalog id (deterministic)",
+        "tier2": {
+            "file": "tier2.bin",
+            "count": int(len(far)),
+            "bytes": len(far_buf),
+            "sha256": far_sha,
+            "stride_bytes": 20,
+            "layout": "little-endian float32 x5: x,y,z (ly, scene) | absmag | colorIndex",
+            "filters": (
+                f"real far-field stars, {FAR_MIN_LY:,.0f}-{FAR_MAX_LY:,.0f} ly; "
+                f"all kept beyond {FAR_KEEP_ALL_LY:,.0f} ly, 1-in-{FAR_INNER_STRIDE} below "
+                "(deterministic by catalog id); distance uncertainty grows with range"
+            ),
+        },
     }
     (OUT_DIR / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
 
     print(f"  wrote {bin_path} ({len(buf):,} bytes, {len(packed):,} stars)")
+    print(f"  wrote tier2.bin ({len(far_buf):,} bytes, {len(far):,} far-field stars)")
     print(f"  wrote names.json ({len(names):,} named stars)")
-    print(f"  sha256: {sha}")
+    print(f"  sha256 tier1: {sha}")
+    print(f"  sha256 tier2: {far_sha}")
 
 
 def main() -> None:
@@ -185,9 +237,11 @@ def main() -> None:
     for part in PARTS:
         download(f"{BASE_URL}/{part}", DATA_DIR / part)
     print("[2/3] load + cull + transform")
-    packed, culled = build(load_catalog())
+    df = load_catalog()
+    packed, culled = build(df)
+    far = build_far_field(df)
     print("[3/3] write outputs")
-    write_outputs(packed, culled)
+    write_outputs(packed, culled, far)
 
 
 if __name__ == "__main__":

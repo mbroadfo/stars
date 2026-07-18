@@ -39,6 +39,24 @@ export async function loadCatalog(base = "/data/tier1") {
   return { data, count, manifest, nameByIndex };
 }
 
+// Tier 2 far field: real stars 3,000-50,000 ly, 5 floats/star —
+// x,y,z (ly, scene) | absmag | colorIndex. Loaded after the main buffer.
+export async function loadFarField(cat, base = "/data/tier1") {
+  const t2 = cat.manifest.tier2;
+  if (!t2) return null;
+  const r = await fetch(`${base}/${t2.file}`);
+  if (!r.ok) throw new Error(`${base}/${t2.file}: HTTP ${r.status}`);
+  const buf = await r.arrayBuffer();
+  if (buf.byteLength !== t2.bytes)
+    throw new Error(`${t2.file} byte length ${buf.byteLength} != manifest ${t2.bytes}`);
+  if (crypto?.subtle) {
+    const digest = await crypto.subtle.digest("SHA-256", buf);
+    const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    if (hex !== t2.sha256) throw new Error(`${t2.file} SHA-256 mismatch vs manifest`);
+  }
+  return { data: new Float32Array(buf), count: t2.count };
+}
+
 // Lightweight per-star accessor (allocation-free callers can use raw `data`).
 export function getStar(cat, i) {
   const o = i * STRIDE;

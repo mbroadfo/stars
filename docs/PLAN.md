@@ -72,7 +72,15 @@ from `web/public/data/` (gitignored) — `npm run sync-data` copies pipeline out
 `web/`: Vite + React + Three.js. Prototype promoted; star buffer fetched; shader
 point rendering. Gate: 60 fps @ 123k stars.
 
-### S3 — Deploy
+### S3 — Deploy ✅
+
+Gate passed 2026-07-18: **<https://stars.xaminisalamini.com>** serves the atlas;
+the runner-rebuilt catalog is byte-identical to the S1 gate build (SHA e691f47b…),
+proving pipeline determinism in production. Deploy learnings: new GitHub repos
+issue **immutable OIDC sub claims** (`repo:owner@id/repo@id:…`) — trust policies
+must match that form; and non-secret config must live in GitHub *Variables*, not
+Secrets, or output masking silently breaks job outputs containing those strings.
+Only 2 secrets remain (Cloudflare token, GH token) — zero AWS credentials stored.
 
 S3 + CloudFront static hosting via GitHub Actions, adapted from the
 [spa-on-aws](https://github.com/mbroadfo/spa-on-aws) template (static-only path:

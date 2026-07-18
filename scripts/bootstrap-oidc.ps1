@@ -65,6 +65,17 @@ $TfBucket   = "$App-tf-state"
 $OidcArn    = "arn:aws:iam::${AccountId}:oidc-provider/token.actions.githubusercontent.com"
 $RepoSub    = "repo:${GithubRepo}:ref:refs/heads/${Branch}"
 
+# Newer repos get IMMUTABLE OIDC subject claims: the sub is prefixed
+# repo:owner@id/repo@id instead of repo:owner/repo. Ask GitHub which prefix
+# this repo actually uses and trust both forms, branch-pinned.
+$env:GH_TOKEN = $GhToken
+$subInfo = gh api "repos/$GithubRepo/actions/oidc/customization/sub" 2>$null | ConvertFrom-Json
+$RepoSubs = @($RepoSub)
+if ($subInfo -and $subInfo.sub_claim_prefix -and $subInfo.sub_claim_prefix -ne "repo:$GithubRepo") {
+    $RepoSubs += "$($subInfo.sub_claim_prefix):ref:refs/heads/${Branch}"
+}
+$RepoSubJson = ($RepoSubs | ForEach-Object { '"' + $_ + '"' }) -join ", "
+
 $identity = aws sts get-caller-identity --output json | ConvertFrom-Json
 Write-Host ""
 Write-Host "=== stars OIDC bootstrap ===" -ForegroundColor Cyan
@@ -117,7 +128,7 @@ $trust = @"
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": { "token.actions.githubusercontent.com:aud": "sts.amazonaws.com" },
-      "StringLike":   { "token.actions.githubusercontent.com:sub": "$RepoSub" }
+      "StringLike":   { "token.actions.githubusercontent.com:sub": [$RepoSubJson] }
     }
   }]
 }
@@ -183,20 +194,27 @@ $ciPolicy = @"
 Ensure-Role "$App-ci" $ciPolicy
 Remove-Item $trustFile
 
-# ── 5. GitHub Secrets (no AWS credentials — that's the point) ────────────────
-Write-Host "`n[5/5] GitHub Secrets on $GithubRepo"
+# ── 5. GitHub config ─────────────────────────────────────────────────────────
+# Non-secret config goes to VARIABLES, not Secrets: GitHub masks any workflow
+# output containing a secret's value, so storing e.g. the app name as a secret
+# silently breaks job outputs like "s3_bucket=stars-assets".
+Write-Host "`n[5/5] GitHub config on $GithubRepo"
 $env:GH_TOKEN = $GhToken
-$secrets = [ordered]@{
-    "TF_STATE_BUCKET"       = $TfBucket
-    "TF_VAR_APP_NAME"       = $App
-    "TF_VAR_ENVIRONMENT"    = $Environment
-    "TF_VAR_CUSTOM_DOMAIN"  = $Domain
-    "CLOUDFLARE_ZONE_ID"    = $CfZoneId
-    "GH_TOKEN"              = $GhToken
+$variables = [ordered]@{
+    "TF_STATE_BUCKET"      = $TfBucket
+    "TF_VAR_APP_NAME"      = $App
+    "TF_VAR_ENVIRONMENT"   = $Environment
+    "TF_VAR_CUSTOM_DOMAIN" = $Domain
+    "CLOUDFLARE_ZONE_ID"   = $CfZoneId
 }
+foreach ($k in $variables.Keys) {
+    Write-Host "      var:    $k"
+    gh variable set $k --repo $GithubRepo --body $variables[$k]
+}
+$secrets = [ordered]@{ "GH_TOKEN" = $GhToken }
 if ($CfToken) { $secrets["CLOUDFLARE_API_TOKEN"] = $CfToken }
 foreach ($k in $secrets.Keys) {
-    Write-Host "      $k"
+    Write-Host "      secret: $k"
     $secrets[$k] | gh secret set $k --repo $GithubRepo
 }
 

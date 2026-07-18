@@ -55,17 +55,17 @@ jobs:
         working-directory: terraform
         run: |
           terraform init -reconfigure -input=false \
-            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=${{ secrets.TF_VAR_APP_NAME }}/terraform.tfstate" \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ vars.TF_VAR_APP_NAME }}/terraform.tfstate" \
             -backend-config="region=${{ env.AWS_DEFAULT_REGION }}"
 
       - name: Terraform Plan
         working-directory: terraform
         env:
-          TF_VAR_app_name:             ${{ secrets.TF_VAR_APP_NAME }}
-          TF_VAR_environment:          ${{ secrets.TF_VAR_ENVIRONMENT }}
-          TF_VAR_custom_domain:        ${{ secrets.TF_VAR_CUSTOM_DOMAIN }}
-          TF_VAR_cloudflare_zone_id:   ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_app_name:             ${{ vars.TF_VAR_APP_NAME }}
+          TF_VAR_environment:          ${{ vars.TF_VAR_ENVIRONMENT }}
+          TF_VAR_custom_domain:        ${{ vars.TF_VAR_CUSTOM_DOMAIN }}
+          TF_VAR_cloudflare_zone_id:   ${{ vars.CLOUDFLARE_ZONE_ID }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: terraform plan -out=tfplan
 

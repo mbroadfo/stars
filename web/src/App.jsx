@@ -38,6 +38,8 @@ export default function App() {
   const [showLines, setShowLines] = useState(true);
   const [skyMode, setSkyMode] = useState("all");   // all | eye | gate
   const [gateLy, setGateLy] = useState(100);
+  const [navOpen, setNavOpen] = useState(true);
+  const [secs, setSecs] = useState({ atlas: true, origin: true, dest: true, brief: true });
 
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
@@ -741,13 +743,10 @@ export default function App() {
   const mono = { fontFamily: "ui-monospace, Menlo, Consolas, monospace" };
   const serif = { fontFamily: "Georgia, 'Times New Roman', serif" };
 
-  const StarCard = ({ st, tag }) => (
-    <div style={{ ...panel, padding: "10px 12px", marginBottom: 8 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div style={{ ...serif, fontSize: 17, color: "#f0e8d8" }}>{st.name ?? `Star #${st.i}`}</div>
-        <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.15em" }}>{tag}</div>
-      </div>
-      <div style={{ ...mono, fontSize: 11.5, color: "#9fb0cf", marginTop: 6, lineHeight: 1.7 }}>
+  const StarCard = ({ st }) => (
+    <div>
+      <div style={{ ...serif, fontSize: 17, color: "#f0e8d8" }}>{st.name ?? `Star #${st.i}`}</div>
+      <div style={{ ...mono, fontSize: 11.5, color: "#9fb0cf", marginTop: 4, lineHeight: 1.7 }}>
         <div>
           {st.spect ?? "spectral class n/a"} · mag {st.mag.toFixed(2)} ·{" "}
           <span style={{ color: rgbToCss(ciToRgb(st.ci, CI_SENTINEL)) }}>●</span>
@@ -760,16 +759,54 @@ export default function App() {
     </div>
   );
 
+  const SunCard = () => (
+    <div>
+      <div style={{ ...serif, fontSize: 17, color: "#f0e8d8" }}>Sun</div>
+      <div style={{ ...mono, fontSize: 11.5, color: "#9fb0cf", marginTop: 4, lineHeight: 1.7 }}>
+        <div>G2V · absmag 4.83 · <span style={{ color: "#fff3e0" }}>●</span></div>
+        <div>0 ly · heliocentric reference origin</div>
+        <div style={{ color: "#66779a" }}>at rest in this frame, by definition</div>
+      </div>
+    </div>
+  );
+
+  const Section = ({ k, title, children }) => (
+    <div style={{ borderTop: "1px solid rgba(232,180,90,0.16)" }}>
+      <div onClick={() => setSecs((p) => ({ ...p, [k]: !p[k] }))}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 14px", cursor: "pointer", userSelect: "none", ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.18em" }}>
+        <span>{title}</span>
+        <span style={{ color: "#8fa0c0" }}>{secs[k] ? "▾" : "▸"}</span>
+      </div>
+      {secs[k] && <div style={{ padding: "0 14px 12px" }}>{children}</div>}
+    </div>
+  );
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100vh", minHeight: 560, background: "#04060d", overflow: "hidden", color: "#dfe6f2" }}>
       <div ref={mountRef} style={{ position: "absolute", inset: 0 }} />
       <div ref={labelsRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" }} />
 
-      {/* Cartouche */}
-      <div style={{ position: "absolute", top: 14, left: 14, ...panel, padding: "12px 16px", maxWidth: 300 }}>
-        <div style={{ ...serif, fontSize: 21, letterSpacing: "0.02em", color: "#f0e8d8" }}>Stellar Neighborhood</div>
-        <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.22em", marginTop: 2 }}>A NAVIGABLE ATLAS · 1 UNIT = 1 LIGHT-YEAR</div>
-        <div style={{ ...mono, fontSize: 11, color: "#8fa0c0", marginTop: 8 }}>
+      {/* Left console */}
+      {!navOpen ? (
+        <button onClick={() => setNavOpen(true)} title="open console"
+          style={{ position: "absolute", top: 14, left: 14, ...panel, ...mono, fontSize: 16, padding: "7px 12px", color: AMBER, cursor: "pointer" }}>
+          ☰
+        </button>
+      ) : (
+      <div style={{ position: "absolute", top: 14, left: 14, width: 302, ...panel, padding: 0, maxHeight: "calc(100vh - 28px)", overflowY: "auto" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px 10px" }}>
+          <button onClick={() => setNavOpen(false)} title="collapse console"
+            style={{ ...mono, fontSize: 14, padding: "3px 9px", background: "none", border: "1px solid rgba(232,180,90,0.35)", color: AMBER, borderRadius: 4, cursor: "pointer" }}>
+            ☰
+          </button>
+          <div>
+            <div style={{ ...serif, fontSize: 18, letterSpacing: "0.02em", color: "#f0e8d8" }}>Stellar Neighborhood</div>
+            <div style={{ ...mono, fontSize: 8.5, color: AMBER, letterSpacing: "0.2em", marginTop: 1 }}>A NAVIGABLE ATLAS · 1 UNIT = 1 LIGHT-YEAR</div>
+          </div>
+        </div>
+
+        <Section k="atlas" title={shipView ? "SHIP" : "ATLAS"}>
+        <div style={{ ...mono, fontSize: 11, color: "#8fa0c0" }}>
           {cat ? <>
             {cat.count.toLocaleString()} stars{farCount > 0 && <> + {farCount.toLocaleString()} far-field</>} · AT-HYG v3.2<br />
             viewing <span style={{ color: "#dfe6f2" }}>{scaleLabel}</span><br />
@@ -851,17 +888,23 @@ export default function App() {
             </button>
           </div>
         )}
-      </div>
+        </Section>
 
-      {/* Selection + journey panel */}
-      <div style={{ position: "absolute", top: 14, right: 14, width: 288, maxHeight: "calc(100% - 28px)", overflowY: "auto" }}>
-        {A && <StarCard st={A} tag={B ? "ORIGIN" : "SELECTED"} />}
-        {B && <StarCard st={B} tag="DESTINATION" />}
+        {A && (
+          <Section k="origin" title="ORIGIN">
+            {B ? <StarCard st={A} /> : <SunCard />}
+          </Section>
+        )}
+        {A && (
+          <Section k="dest" title="DESTINATION">
+            <StarCard st={B ?? A} />
+          </Section>
+        )}
 
         {brief && (
-          <div style={{ ...panel, padding: "12px 14px", borderColor: "rgba(232,180,90,0.5)" }}>
-            <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em" }}>
-              MISSION BRIEF · {journeyFrom.toUpperCase()} → {journeyTo.toUpperCase()}
+          <Section k="brief" title="MISSION BRIEF">
+            <div style={{ ...mono, fontSize: 10, color: "#8fa0c0", letterSpacing: "0.15em" }}>
+              {journeyFrom.toUpperCase()} → {journeyTo.toUpperCase()}
             </div>
             <div style={{ ...serif, fontSize: 24, color: "#f0e8d8", margin: "6px 0 2px" }}>
               {fmt(sepLy, sepLy < 100 ? 2 : 0)} <span style={{ fontSize: 14, color: "#9fb0cf" }}>light-years</span>
@@ -906,10 +949,14 @@ export default function App() {
               style={{ ...mono, fontSize: 10.5, marginTop: 10, padding: "4px 10px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
               Clear selection
             </button>
-          </div>
+          </Section>
         )}
+      </div>
+      )}
 
-        {!A && showHelp && (
+      {/* Help — top right, first run only */}
+      {!A && showHelp && (
+        <div style={{ position: "absolute", top: 14, right: 14, width: 288 }}>
           <div style={{ ...panel, padding: "12px 14px" }}>
             <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em", marginBottom: 8 }}>HOW TO FLY</div>
             <div style={{ ...mono, fontSize: 11.5, color: "#9fb0cf", lineHeight: 1.9 }}>
@@ -928,8 +975,8 @@ export default function App() {
               dismiss
             </button>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Trip instrument bar */}
       {shipView && trip && (

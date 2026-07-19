@@ -117,7 +117,18 @@ catalog; a `git push` touching only `web/` redeploys without touching data.
 then rides the same "watch the sky change" machinery (positions advanced by v·t
 instead of the camera moving).
 
-### S4.5 ⭐ — The Traveler's Sky (planned; build BEFORE S4)
+### S4.5 ⭐ — The Traveler's Sky (in progress; build BEFORE S4)
+
+**Shipped 2026-07-19 — tests 1 + 2 live in production:** asterism lines
+(123 lines / 23 constellations, hand-curated license-clean, all endpoints
+resolved against AT-HYG con+bayer incl. hyphenated double-star suffixes);
+ship view from the Sun (look-around, FOV zoom, target reticle + offscreen
+arrow); trip engine (Start trip → play/pause/scrub a brachistochrone with
+live ship-time/Earth-time/β/γ instruments; GPU-computed apparent magnitudes
+from the ship's position; Sun marker carries real absmag 4.83). Verified:
+midpoint Sun→Vega reads 3.2 ship yr / 13.5 Earth yr / 99.742% c / γ 13.93;
+Lyra deforms and sheds Vega on arrival. Remaining: aberration/Doppler toggle
+(phase 2), label-collision + core-blowout polish, click-anything cards.
 
 Pick two stars, press **Start Trip**, and ride a relativistic brachistochrone
 while the constellations deform, dissolve, and reassemble around you.

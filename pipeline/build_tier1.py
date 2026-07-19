@@ -54,12 +54,17 @@ EQ2GAL = np.array(
 # Missing color index sentinel (documented in manifest.json).
 CI_SENTINEL = 99.0
 
-USECOLS = ["id", "proper", "spect", "mag", "absmag", "ci", "dist",
+USECOLS = ["id", "proper", "spect", "hip", "bayer", "flam", "con",
+           "mag", "absmag", "ci", "dist",
            "x0", "y0", "z0", "vx", "vy", "vz"]
 DTYPES = {
     "id": "int64",
     "proper": "string",
     "spect": "string",
+    "hip": "float64",
+    "bayer": "string",
+    "flam": "float64",
+    "con": "string",
     "mag": "float64",
     "absmag": "float64",
     "ci": "float64",
@@ -150,17 +155,47 @@ def build_far_field(df: pd.DataFrame) -> np.ndarray:
     far = df[ok].sort_values("id", kind="mergesort").reset_index(drop=True)
     inner = far["dist"] * PC_TO_LY <= FAR_KEEP_ALL_LY
     keep = ~inner | (np.arange(len(far)) % FAR_INNER_STRIDE == 0)
-    far = far[keep]
+    far = far[keep].reset_index(drop=True)
     print(f"  far field: {int(ok.sum()):,} in range -> {len(far):,} after thinning "
           f"(all beyond {FAR_KEEP_ALL_LY:,.0f} ly kept)")
 
     pos_gal = (far[["x0", "y0", "z0"]].to_numpy() * PC_TO_LY) @ EQ2GAL.T
     scene = np.column_stack([pos_gal[:, 0], pos_gal[:, 2], -pos_gal[:, 1]])
     ci = far["ci"].to_numpy(dtype="float64", na_value=CI_SENTINEL)
-    return np.column_stack([scene, far["absmag"].to_numpy(), ci]).astype("<f4")
+    packed = np.column_stack([scene, far["absmag"].to_numpy(), ci]).astype("<f4")
+    return packed, far
 
 
-def write_outputs(packed: np.ndarray, culled: pd.DataFrame, far: np.ndarray) -> None:
+def build_ids(culled: pd.DataFrame, far_df: pd.DataFrame):
+    """Identity sidecars: every star is a citizen with a citable designation.
+
+    tier1_ids.bin — uint32 LE x3 per star: AT-HYG id | HIP (0 = none) |
+    constellation index into manifest's constellation table.
+    tier2_ids.bin — uint32 LE x1 per star: AT-HYG id.
+    desig.json    — Bayer/Flamsteed designation strings for tier1 stars.
+    """
+    constellations = sorted(culled["con"].dropna().unique().tolist())
+    con_index = {c: i for i, c in enumerate(constellations)}
+
+    hip = culled["hip"].to_numpy(dtype="float64", na_value=0.0).astype("<u4")
+    con = culled["con"].map(con_index).to_numpy(dtype="float64", na_value=0.0).astype("<u4")
+    t1_ids = np.column_stack([culled["id"].to_numpy().astype("<u4"), hip, con])
+    t2_ids = far_df["id"].to_numpy().astype("<u4")
+
+    desig = {}
+    for idx, row in culled.iterrows():
+        if pd.notna(row.bayer):
+            desig[str(idx)] = f"{row.bayer} {row.con}"
+        elif pd.notna(row.flam):
+            desig[str(idx)] = f"{int(row.flam)} {row.con}"
+    print(f"  ids: tier1 HIP present {int((hip > 0).sum()):,}; "
+          f"{len(desig):,} Bayer/Flamsteed designations; "
+          f"{len(constellations)} constellations")
+    return t1_ids, t2_ids, desig, constellations
+
+
+def write_outputs(packed: np.ndarray, culled: pd.DataFrame,
+                  far: np.ndarray, far_df: pd.DataFrame) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     bin_path = OUT_DIR / "tier1.bin"
@@ -171,6 +206,15 @@ def write_outputs(packed: np.ndarray, culled: pd.DataFrame, far: np.ndarray) -> 
     far_buf = far.tobytes()
     (OUT_DIR / "tier2.bin").write_bytes(far_buf)
     far_sha = hashlib.sha256(far_buf).hexdigest()
+
+    t1_ids, t2_ids, desig, constellations = build_ids(culled, far_df)
+    t1_ids_buf = t1_ids.tobytes()
+    t2_ids_buf = t2_ids.tobytes()
+    (OUT_DIR / "tier1_ids.bin").write_bytes(t1_ids_buf)
+    (OUT_DIR / "tier2_ids.bin").write_bytes(t2_ids_buf)
+    (OUT_DIR / "desig.json").write_text(
+        json.dumps(desig, indent=0, sort_keys=False), encoding="utf-8"
+    )
 
     named = culled[culled["proper"].notna()]
     names = {
@@ -211,6 +255,23 @@ def write_outputs(packed: np.ndarray, culled: pd.DataFrame, far: np.ndarray) -> 
                 "(deterministic by catalog id); distance uncertainty grows with range"
             ),
         },
+        "ids": {
+            "tier1_ids": {
+                "file": "tier1_ids.bin",
+                "bytes": len(t1_ids_buf),
+                "sha256": hashlib.sha256(t1_ids_buf).hexdigest(),
+                "layout": "little-endian uint32 x3: athyg_id | hip (0=none) | constellation_index",
+                "hip_count": int((t1_ids[:, 1] > 0).sum()),
+            },
+            "tier2_ids": {
+                "file": "tier2_ids.bin",
+                "bytes": len(t2_ids_buf),
+                "sha256": hashlib.sha256(t2_ids_buf).hexdigest(),
+                "layout": "little-endian uint32 x1: athyg_id",
+            },
+            "desig_count": len(desig),
+        },
+        "constellations": constellations,
     }
     (OUT_DIR / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
@@ -239,9 +300,9 @@ def main() -> None:
     print("[2/3] load + cull + transform")
     df = load_catalog()
     packed, culled = build(df)
-    far = build_far_field(df)
+    far, far_df = build_far_field(df)
     print("[3/3] write outputs")
-    write_outputs(packed, culled, far)
+    write_outputs(packed, culled, far, far_df)
 
 
 if __name__ == "__main__":

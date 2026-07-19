@@ -113,7 +113,67 @@ catalog; a `git push` touching only `web/` redeploys without touching data.
 ### S4 — Time scrub
 
 ±100k years using velocity vectors. Gate: reproduce Barnard's Star closest approach
-(~11.8k yr from now, ~3.75 ly).
+(~11.8k yr from now, ~3.75 ly). Build order note: S4.5 goes first — time scrub
+then rides the same "watch the sky change" machinery (positions advanced by v·t
+instead of the camera moving).
+
+### S4.5 ⭐ — The Traveler's Sky (planned; build BEFORE S4)
+
+Pick two stars, press **Start Trip**, and ride a relativistic brachistochrone
+while the constellations deform, dissolve, and reassemble around you.
+
+**Core insight (why this is cheap):** every star already sits at its true 3D
+position, so a planetarium is just the camera placed AT the ship looking
+outward — and constellation lines drawn between real stars deform
+automatically under perspective as the ship moves. No simulation, no per-frame
+updates; the data does all the work.
+
+**Experience flow:** Planetarium button (view from the Sun, constellations
+drawn) → select destination → Start Trip → play/scrub a timeline along the
+route at 0.5/1/2 g while instruments tick ship time, Earth time, β, γ →
+arrival shows the destination's sky, with the Sun faded to an ordinary star.
+
+**Data groundwork (pipeline):**
+
+- `tier1_ids.bin`: uint32 ×3 per star — AT-HYG id, HIP (0 = none),
+  constellation index. Probed: HIP covers 83,268 of tier1 and **516/516 of
+  mag ≤ 4** (every possible line anchor); `con` covers 100% of tier1.
+- `tier2_ids.bin`: uint32 ×1 — AT-HYG id (far field is Tycho/Gaia territory;
+  cards show "AT-HYG #n").
+- `desig.json`: Bayer (1,522) / Flamsteed (2,724) designations for tier1.
+- `asterisms.json`: constellation line segments as pairs of tier1 buffer
+  indices, resolved from HIP at build time. Source dataset must be
+  license-vetted (Stellarium skyculture data is GPL — prefer BSD/MIT-licensed
+  line sets or hand-curate ~25 major constellations from IAU/HIP tables).
+- Constellation code table goes in `manifest.json`; gate test extended.
+
+**Physics (lib/physics.js):**
+
+- Absolute magnitude in-shader from packed apparent mag:
+  `M = m − 5·log10(d_sun_pc / 10)` (tier2 already ships absmag).
+- Apparent magnitude from the ship: `m' = M + 5·log10(d_ship_pc / 10)` —
+  per-vertex; stars genuinely brighten ahead and fade behind.
+- `brachAt(D, a, f)` — waypoint state at fraction f of a brachistochrone:
+  accel half X = 1 + a·x → γ = X, β = √(X²−1)/X, τ = acosh(X)/a,
+  t = √(X²−1)/a; mirrored for the decel half.
+- Phase 2 (toggle, labeled): relativistic aberration
+  cos θ' = (cos θ − β)/(1 − β·cos θ) and Doppler recoloring.
+
+**Viewer:** mode `atlas | ship`; mouse-look + FOV zoom in ship view;
+constellation LineSegments layer visible in both modes; Start Trip button in
+the mission brief; timeline with play/pause/scrub. Riders while in these
+files: label collision handling at shallow view angles, zoom-dependent core
+brightness attenuation, click-anything identity cards (uses the ids buffers).
+
+**Gates:**
+
+1. Planetarium fidelity — from the Sun, Orion / Ursa Major / Cassiopeia match
+   real star-chart geometry; every line endpoint is a measured catalog star.
+2. Sky deformation — Sun→Vega at 1 g: Sirius and Procyon visibly displaced by
+   mid-trip; at arrival Vega dominates the sky (~mag −8) and the Sun has faded
+   to naked-eye threshold, computed ≈ **mag +4.3** (absmag 4.83 at 7.68 pc).
+3. Performance — 60 fps in ship view with lines + both star tiers.
+4. Honesty — nothing procedural in the sky; relativistic toggles labeled.
 
 ### S5 ⭐ — Route planner
 

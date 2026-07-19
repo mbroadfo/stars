@@ -104,6 +104,32 @@ def main() -> None:
     else:
         ok &= check("tier2 present in manifest", False)
 
+    print("[identity sidecars]")
+    ids = manifest.get("ids")
+    if ids:
+        t1i_buf = (OUT_DIR / ids["tier1_ids"]["file"]).read_bytes()
+        t2i_buf = (OUT_DIR / ids["tier2_ids"]["file"]).read_bytes()
+        ok &= check(
+            "tier1_ids sha256",
+            hashlib.sha256(t1i_buf).hexdigest() == ids["tier1_ids"]["sha256"],
+        )
+        t1i = np.frombuffer(t1i_buf, dtype="<u4").reshape(-1, 3)
+        ok &= check("tier1_ids row count", len(t1i) == len(stars), f"{len(t1i):,}")
+        ok &= check(
+            "tier1 HIP coverage", int((t1i[:, 1] > 0).sum()) == ids["tier1_ids"]["hip_count"],
+            f"{int((t1i[:, 1] > 0).sum()):,} stars with HIP",
+        )
+        t2i = np.frombuffer(t2i_buf, dtype="<u4")
+        t2_count = manifest["tier2"]["count"]
+        ok &= check("tier2_ids row count", len(t2i) == t2_count, f"{len(t2i):,}")
+        ncon = len(manifest.get("constellations", []))
+        ok &= check("constellation table (88)", ncon == 88, f"{ncon} codes")
+        ok &= check(
+            "constellation indices in range", bool((t1i[:, 2] < max(ncon, 1)).all())
+        )
+    else:
+        ok &= check("ids present in manifest", False)
+
     print("[spot-check vs prototype]")
     by_name = {v["name"]: int(k) for k, v in names.items()}
     for name, (ra_h, dec_deg, dist_ly) in PROTOTYPE_STARS.items():
@@ -121,6 +147,13 @@ def main() -> None:
             f"catalog ({got[0]:.2f}, {got[1]:.2f}, {got[2]:.2f}) vs prototype "
             f"({want[0]:.2f}, {want[1]:.2f}, {want[2]:.2f}), err {err:.3f} ly (tol {tol:.3f})",
         )
+
+    # HIP anchors: the two spot-check stars have famous Hipparcos numbers.
+    if ids:
+        for name, hip_expect in [("Sirius", 32349), ("Vega", 91262)]:
+            if name in by_name:
+                got_hip = int(t1i[by_name[name], 1])
+                ok &= check(f"{name} HIP", got_hip == hip_expect, f"HIP {got_hip}")
 
     print("GATE " + ("PASSED" if ok else "FAILED"))
     sys.exit(0 if ok else 1)

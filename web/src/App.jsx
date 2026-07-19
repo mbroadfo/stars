@@ -35,8 +35,15 @@ export default function App() {
   const [tripUi, setTripUi] = useState(null);      // { frac, shipYears, earthYears, beta, gamma }
   const [tripPlaying, setTripPlaying] = useState(false);
 
-  // animate() lives in a closure — mirror the accel choice into the ref
+  const [showLines, setShowLines] = useState(true);
+  const [skyMode, setSkyMode] = useState("all");   // all | eye | gate
+  const [gateLy, setGateLy] = useState(100);
+
+  // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
+  useEffect(() => { stateRef.current.showLines = showLines; }, [showLines]);
+  useEffect(() => { stateRef.current.skyMode = skyMode; }, [skyMode]);
+  useEffect(() => { stateRef.current.gateLy = gateLy; }, [gateLy]);
 
   useEffect(() => {
     loadCatalog().then(setCat).catch((e) => setLoadError(String(e)));
@@ -131,17 +138,34 @@ export default function App() {
     starGeo.setAttribute("position", new THREE.InterleavedBufferAttribute(inter, 3, 0));
     starGeo.setAttribute("mag", new THREE.InterleavedBufferAttribute(inter, 1, 6));
     starGeo.setAttribute("color", new THREE.BufferAttribute(colArr, 3));
-    // Shared star fragment: soft disc + halo, alpha fades with apparent mag.
+    // Shared star fragment: soft disc + halo, alpha fades with apparent mag,
+    // vFade carries the ship-view sky filters (naked-eye limit / range gate).
     const STAR_FRAG = `
-      varying vec3 vColor; varying float vMag;
+      varying vec3 vColor; varying float vMag; varying float vFade;
       void main(){ vec2 uv=gl_PointCoord-0.5; float d=length(uv);
         float core=smoothstep(0.16,0.02,d); float halo=smoothstep(0.5,0.08,d)*0.55;
-        float a=clamp(core+halo,0.0,1.0); if(a<0.02) discard;
+        float a=clamp(core+halo,0.0,1.0);
         a*=1.0-0.55*smoothstep(5.5,9.0,vMag);
+        a*=vFade;
+        if(a<0.02) discard;
         gl_FragColor=vec4(mix(vColor,vec3(1.0),core*0.7),a); }`;
+    // Sky filters, applied only in ship view: uMagLimit culls below the
+    // naked-eye threshold as seen FROM THE SHIP (realism, not decoration);
+    // uGate fades stars beyond a chosen distance (a labeled instrument
+    // filter, like range gating on radar).
+    const SKY_FILTER = `
+      float fade = 1.0;
+      if (uMagLimit < 50.0) fade *= 1.0 - smoothstep(uMagLimit - 1.0, uMagLimit + 0.5, m);
+      if (uGate > 0.0) fade *= 1.0 - 0.9 * smoothstep(uGate * 0.8, uGate * 1.3, dShip);
+      vFade = fade;`;
     // 5/ln(10) — GLSL log() is natural log.
     const LOG10x5 = "2.171472409516";
-    const shipUniforms = () => ({ uShip: { value: 0 }, uShipPos: { value: new THREE.Vector3() } });
+    const shipUniforms = () => ({
+      uShip: { value: 0 },
+      uShipPos: { value: new THREE.Vector3() },
+      uMagLimit: { value: 99 },
+      uGate: { value: 0 },
+    });
 
     // Tier 1 packs Sun-apparent magnitude; from the ship the apparent mag is
     // m' = m + 5·log10(d_ship / d_sun) — both distances live on the GPU.
@@ -150,13 +174,16 @@ export default function App() {
       uniforms: shipUniforms(),
       vertexShader: `
         uniform float uShip; uniform vec3 uShipPos;
-        attribute float mag; varying vec3 vColor; varying float vMag;
+        uniform float uMagLimit; uniform float uGate;
+        attribute float mag; varying vec3 vColor; varying float vMag; varying float vFade;
         void main(){ vColor=color;
           float m = mag;
+          vFade = 1.0;
           if (uShip > 0.5) {
             float dSun = max(length(position), 0.001);
             float dShip = max(distance(position, uShipPos), 0.05);
             m = mag + ${LOG10x5} * log(dShip / dSun);
+            ${SKY_FILTER}
           }
           vMag = m;
           vec4 mv=modelViewMatrix*vec4(position,1.0);
@@ -172,13 +199,16 @@ export default function App() {
       uniforms: { ...shipUniforms(), uAtlasSize: { value: atlasSize } },
       vertexShader: `
         uniform float uShip; uniform vec3 uShipPos; uniform float uAtlasSize;
-        attribute float absmag; varying vec3 vColor; varying float vMag;
+        uniform float uMagLimit; uniform float uGate;
+        attribute float absmag; varying vec3 vColor; varying float vMag; varying float vFade;
         void main(){ vColor=color;
           float sz; float m;
+          vFade = 1.0;
           if (uShip > 0.5) {
             float dShip = max(distance(position, uShipPos), 0.05);
             m = absmag + ${LOG10x5} * log(dShip / 32.6156);
             sz = clamp(15.5-2.2*m, 1.0, 19.0);
+            ${SKY_FILTER}
           } else {
             m = 4.0;
             sz = uAtlasSize > 0.0 ? uAtlasSize : clamp(3.2-0.35*absmag, 1.0, 5.0);
@@ -273,6 +303,7 @@ export default function App() {
       astLines.frustumCulled = false;
       scene.add(astLines);
       s.astMat = astMat; // ship view boosts these — they're the point there
+      s.astLines = astLines;
     }
 
     // --- Sun marker — carries the Sun's REAL absolute magnitude (4.83), so
@@ -529,10 +560,15 @@ export default function App() {
         }
       }
       const shipOn = s.mode === "ship" ? 1 : 0;
+      const magLimit = shipOn && s.skyMode === "eye" ? 6.5 : 99;
+      const gate = shipOn && s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
       for (const m of s.shipMats) {
         m.uniforms.uShip.value = shipOn;
         m.uniforms.uShipPos.value.copy(s.shipPos);
+        m.uniforms.uMagLimit.value = magLimit;
+        m.uniforms.uGate.value = gate;
       }
+      if (s.astLines) s.astLines.visible = s.showLines !== false;
       if (s.mode === "ship") {
         camera.position.copy(s.shipPos);
         const cpt = Math.cos(s.shipPitch);
@@ -752,6 +788,40 @@ export default function App() {
             <div style={{ ...mono, fontSize: 10.5, color: "#8fa0c0", marginTop: 4 }}>
               drag — look around · scroll — zoom field of view
             </div>
+            <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <button onClick={() => setShowLines(!showLines)}
+                style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+                  background: showLines ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
+                  border: `1px solid rgba(143,165,216,${showLines ? 0.6 : 0.25})`, color: "#aebde0" }}>
+                lines {showLines ? "on" : "off"}
+              </button>
+              {[["all", "ALL"], ["eye", "NAKED EYE"], ["gate", "RANGE GATE"]].map(([k, label]) => (
+                <button key={k} onClick={() => setSkyMode(k)}
+                  style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+                    background: skyMode === k ? "rgba(232,180,90,0.25)" : "rgba(232,180,90,0.05)",
+                    border: `1px solid rgba(232,180,90,${skyMode === k ? 0.65 : 0.25})`, color: "#e8c88a" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {skyMode === "gate" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+                <input type="range" min="10" max="500" step="10" value={gateLy}
+                  onChange={(e) => setGateLy(Number(e.target.value))}
+                  style={{ flex: 1, accentColor: AMBER }} />
+                <span style={{ ...mono, fontSize: 10.5, color: "#9fb0cf", minWidth: 52, textAlign: "right" }}>{gateLy} ly</span>
+              </div>
+            )}
+            {skyMode === "eye" && (
+              <div style={{ ...mono, fontSize: 9.5, color: "#5a6a8f", marginTop: 4 }}>
+                showing only stars visible to the naked eye from the ship (mag ≤ 6.5)
+              </div>
+            )}
+            {skyMode === "gate" && (
+              <div style={{ ...mono, fontSize: 9.5, color: "#5a6a8f", marginTop: 4 }}>
+                instrument filter: fading stars beyond the gate distance
+              </div>
+            )}
             {!trip && (
               <button onClick={() => stateRef.current.startTrip?.()}
                 style={{ ...mono, fontSize: 11, marginTop: 8, marginRight: 6, padding: "5px 12px",
@@ -773,6 +843,12 @@ export default function App() {
                 {label}
               </button>
             ))}
+            <button onClick={() => setShowLines(!showLines)}
+              style={{ ...mono, fontSize: 10.5, padding: "4px 9px", borderRadius: 4, cursor: "pointer",
+                background: showLines ? "rgba(143,165,216,0.18)" : "rgba(143,165,216,0.04)",
+                border: `1px solid rgba(143,165,216,${showLines ? 0.55 : 0.25})`, color: "#aebde0" }}>
+              lines {showLines ? "on" : "off"}
+            </button>
           </div>
         )}
       </div>

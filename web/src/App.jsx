@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback } from "react";
 import * as THREE from "three";
 import { loadCatalog, loadFarField, getStar, STRIDE, CI_SENTINEL } from "./lib/catalog.js";
-import { journey, closureRate, separationLy, fmt, fmtYears, KM_PER_LY } from "./lib/physics.js";
+import { journey, brachAt, closureRate, separationLy, fmt, fmtYears, KM_PER_LY } from "./lib/physics.js";
 import { ciToRgb, rgbToCss } from "./lib/color.js";
 
 /* ============================================================
@@ -31,6 +31,12 @@ export default function App() {
   const [showHelp, setShowHelp] = useState(true);
   const [shipView, setShipView] = useState(false); // Traveler's Sky mode
   const [shipFovUi, setShipFovUi] = useState(60);
+  const [trip, setTrip] = useState(null);          // { D, name } — static trip facts
+  const [tripUi, setTripUi] = useState(null);      // { frac, shipYears, earthYears, beta, gamma }
+  const [tripPlaying, setTripPlaying] = useState(false);
+
+  // animate() lives in a closure — mirror the accel choice into the ref
+  useEffect(() => { stateRef.current.accel = accel; }, [accel]);
 
   useEffect(() => {
     loadCatalog().then(setCat).catch((e) => setLoadError(String(e)));
@@ -88,9 +94,29 @@ export default function App() {
     };
     s.exitShip = () => {
       s.mode = "atlas";
+      s.trip = null;
+      s.shipPos.set(0, 0, 0);
       camera.fov = 55;
       camera.updateProjectionMatrix();
       setShipView(false);
+      setTrip(null); setTripUi(null); setTripPlaying(false);
+    };
+    s.startTrip = () => {
+      if (s.mode !== "ship" || s.targetIdx == null) return;
+      const o = s.targetIdx * STRIDE;
+      const to = new THREE.Vector3(cat.data[o], cat.data[o + 1], cat.data[o + 2]);
+      s.trip = { from: new THREE.Vector3(0, 0, 0), to, D: to.length(), frac: 0, playing: true, durSec: 40 };
+      setTrip({ D: s.trip.D, name: cat.nameByIndex.get(s.targetIdx)?.name ?? `Star #${s.targetIdx}` });
+      setTripPlaying(true);
+    };
+    s.setTripFrac = (f) => {
+      if (!s.trip) return;
+      s.trip.frac = f; s.trip.playing = false; setTripPlaying(false);
+    };
+    s.setTripPlaying = (p) => {
+      if (!s.trip) return;
+      if (p && s.trip.frac >= 1) s.trip.frac = 0; // replay from the top
+      s.trip.playing = p; setTripPlaying(p);
     };
 
     // --- Star field: one draw call over the whole Tier 1 buffer ---
@@ -105,22 +131,66 @@ export default function App() {
     starGeo.setAttribute("position", new THREE.InterleavedBufferAttribute(inter, 3, 0));
     starGeo.setAttribute("mag", new THREE.InterleavedBufferAttribute(inter, 1, 6));
     starGeo.setAttribute("color", new THREE.BufferAttribute(colArr, 3));
+    // Shared star fragment: soft disc + halo, alpha fades with apparent mag.
+    const STAR_FRAG = `
+      varying vec3 vColor; varying float vMag;
+      void main(){ vec2 uv=gl_PointCoord-0.5; float d=length(uv);
+        float core=smoothstep(0.16,0.02,d); float halo=smoothstep(0.5,0.08,d)*0.55;
+        float a=clamp(core+halo,0.0,1.0); if(a<0.02) discard;
+        a*=1.0-0.55*smoothstep(5.5,9.0,vMag);
+        gl_FragColor=vec4(mix(vColor,vec3(1.0),core*0.7),a); }`;
+    // 5/ln(10) — GLSL log() is natural log.
+    const LOG10x5 = "2.171472409516";
+    const shipUniforms = () => ({ uShip: { value: 0 }, uShipPos: { value: new THREE.Vector3() } });
+
+    // Tier 1 packs Sun-apparent magnitude; from the ship the apparent mag is
+    // m' = m + 5·log10(d_ship / d_sun) — both distances live on the GPU.
     const starMat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      uniforms: shipUniforms(),
       vertexShader: `
+        uniform float uShip; uniform vec3 uShipPos;
         attribute float mag; varying vec3 vColor; varying float vMag;
-        void main(){ vColor=color; vMag=mag; vec4 mv=modelViewMatrix*vec4(position,1.0);
-          gl_PointSize=clamp(15.5-2.2*mag, 1.6, 19.0);
+        void main(){ vColor=color;
+          float m = mag;
+          if (uShip > 0.5) {
+            float dSun = max(length(position), 0.001);
+            float dShip = max(distance(position, uShipPos), 0.05);
+            m = mag + ${LOG10x5} * log(dShip / dSun);
+          }
+          vMag = m;
+          vec4 mv=modelViewMatrix*vec4(position,1.0);
+          gl_PointSize=clamp(15.5-2.2*m, 1.6, 19.0);
           gl_Position=projectionMatrix*mv; }`,
-      fragmentShader: `
-        varying vec3 vColor; varying float vMag;
-        void main(){ vec2 uv=gl_PointCoord-0.5; float d=length(uv);
-          float core=smoothstep(0.16,0.02,d); float halo=smoothstep(0.5,0.08,d)*0.55;
-          float a=clamp(core+halo,0.0,1.0); if(a<0.02) discard;
-          a*=1.0-0.55*smoothstep(5.5,9.0,vMag);
-          gl_FragColor=vec4(mix(vColor,vec3(1.0),core*0.7),a); }`,
+      fragmentShader: STAR_FRAG,
       vertexColors: true,
     });
+    // Absmag-based variant (far field + Sun marker): m' = M + 5·log10(d_pc/10),
+    // with d in ly (10 pc = 32.6156 ly). uAtlasSize > 0 pins atlas-mode size.
+    const mkAbsmagMat = (atlasSize) => new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      uniforms: { ...shipUniforms(), uAtlasSize: { value: atlasSize } },
+      vertexShader: `
+        uniform float uShip; uniform vec3 uShipPos; uniform float uAtlasSize;
+        attribute float absmag; varying vec3 vColor; varying float vMag;
+        void main(){ vColor=color;
+          float sz; float m;
+          if (uShip > 0.5) {
+            float dShip = max(distance(position, uShipPos), 0.05);
+            m = absmag + ${LOG10x5} * log(dShip / 32.6156);
+            sz = clamp(15.5-2.2*m, 1.0, 19.0);
+          } else {
+            m = 4.0;
+            sz = uAtlasSize > 0.0 ? uAtlasSize : clamp(3.2-0.35*absmag, 1.0, 5.0);
+          }
+          vMag = m;
+          vec4 mv=modelViewMatrix*vec4(position,1.0);
+          gl_PointSize=sz;
+          gl_Position=projectionMatrix*mv; }`,
+      fragmentShader: STAR_FRAG,
+      vertexColors: true,
+    });
+    s.shipMats = [starMat];
     const starPoints = new THREE.Points(starGeo, starMat);
     starPoints.frustumCulled = false;
     scene.add(starPoints);
@@ -151,19 +221,8 @@ export default function App() {
         geo2.setAttribute("position", new THREE.InterleavedBufferAttribute(inter2, 3, 0));
         geo2.setAttribute("absmag", new THREE.InterleavedBufferAttribute(inter2, 1, 3));
         geo2.setAttribute("color", new THREE.BufferAttribute(col2, 3));
-        const mat2 = new THREE.ShaderMaterial({
-          transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, vertexColors: true,
-          vertexShader: `
-            attribute float absmag; varying vec3 vColor;
-            void main(){ vColor=color; vec4 mv=modelViewMatrix*vec4(position,1.0);
-              gl_PointSize=clamp(3.2-0.35*absmag,1.0,5.0);
-              gl_Position=projectionMatrix*mv; }`,
-          fragmentShader: `
-            varying vec3 vColor;
-            void main(){ vec2 uv=gl_PointCoord-0.5; float d=length(uv);
-              float a=smoothstep(0.5,0.05,d)*0.5; if(a<0.02) discard;
-              gl_FragColor=vec4(vColor,a); }`,
-        });
+        const mat2 = mkAbsmagMat(0);
+        s.shipMats.push(mat2);
         const farPoints = new THREE.Points(geo2, mat2);
         farPoints.frustumCulled = false;
         scene.add(farPoints);
@@ -216,12 +275,18 @@ export default function App() {
       s.astMat = astMat; // ship view boosts these — they're the point there
     }
 
-    // --- Sun marker (rides the same shader; mag -2 renders as a bright core) ---
+    // --- Sun marker — carries the Sun's REAL absolute magnitude (4.83), so
+    // in ship view it fades honestly with distance (mag +4.25 seen from Vega).
+    // In atlas mode uAtlasSize pins it to a prominent fixed size.
     const sunGeo = new THREE.BufferGeometry();
     sunGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array([0, 0, 0]), 3));
     sunGeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array([1, 0.95, 0.8]), 3));
-    sunGeo.setAttribute("mag", new THREE.BufferAttribute(new Float32Array([-2]), 1));
-    scene.add(new THREE.Points(sunGeo, starMat));
+    sunGeo.setAttribute("absmag", new THREE.BufferAttribute(new Float32Array([4.83]), 1));
+    const sunMat = mkAbsmagMat(16);
+    s.shipMats.push(sunMat);
+    const sunPoints = new THREE.Points(sunGeo, sunMat);
+    sunPoints.frustumCulled = false;
+    scene.add(sunPoints);
 
     // --- Distance rings (log scale) in galactic plane ---
     const ringGroup = new THREE.Group();
@@ -448,6 +513,26 @@ export default function App() {
         s.radius = f.fromRadius * Math.pow(f.toRadius / f.fromRadius, k);
         if (f.t >= 1) s.flyAnim = null;
       }
+
+      // Trip drive: ship position slides along the route; instruments follow.
+      if (s.mode === "ship" && s.trip) {
+        const T = s.trip;
+        if (T.playing) {
+          T.frac = Math.min(1, T.frac + dt / T.durSec);
+          if (T.frac >= 1) { T.playing = false; setTripPlaying(false); }
+        }
+        s.shipPos.lerpVectors(T.from, T.to, T.frac);
+        s.tripUiT = (s.tripUiT ?? 0) + dt;
+        if (s.tripUiT > 0.15) {
+          s.tripUiT = 0;
+          setTripUi({ frac: T.frac, distLy: T.frac * T.D, ...brachAt(T.D, s.accel ?? 1, T.frac) });
+        }
+      }
+      const shipOn = s.mode === "ship" ? 1 : 0;
+      for (const m of s.shipMats) {
+        m.uniforms.uShip.value = shipOn;
+        m.uniforms.uShipPos.value.copy(s.shipPos);
+      }
       if (s.mode === "ship") {
         camera.position.copy(s.shipPos);
         const cpt = Math.cos(s.shipPitch);
@@ -541,7 +626,7 @@ export default function App() {
       const sel = s.selectedIdx || [];
       [s.haloA, s.haloB].forEach((halo, i) => {
         const idx = sel[i];
-        if (idx == null) { halo.visible = false; return; }
+        if (idx == null || s.mode === "ship") { halo.visible = false; return; }
         const o = idx * STRIDE;
         halo.visible = true;
         halo.position.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]);
@@ -601,7 +686,7 @@ export default function App() {
     sepLy = A.ly;
     journeyFrom = "Sun"; journeyTo = A.name ?? "selected star";
   }
-  const trip = sepLy ? journey(sepLy, accel) : null;
+  const brief = sepLy ? journey(sepLy, accel) : null;
   const voyYears = sepLy ? (sepLy * KM_PER_LY) / 17 / 3.15576e7 : null;
 
   const hoveredStar = cat && hovered != null ? getStar(cat, hovered) : null;
@@ -667,6 +752,14 @@ export default function App() {
             <div style={{ ...mono, fontSize: 10.5, color: "#8fa0c0", marginTop: 4 }}>
               drag — look around · scroll — zoom field of view
             </div>
+            {!trip && (
+              <button onClick={() => stateRef.current.startTrip?.()}
+                style={{ ...mono, fontSize: 11, marginTop: 8, marginRight: 6, padding: "5px 12px",
+                  background: "rgba(232,180,90,0.22)", border: "1px solid rgba(232,180,90,0.7)",
+                  color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
+                ▶ Start trip · {accel} g
+              </button>
+            )}
             <button onClick={() => stateRef.current.exitShip?.()}
               style={{ ...mono, fontSize: 10.5, marginTop: 8, padding: "4px 10px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
               ← Back to atlas
@@ -689,7 +782,7 @@ export default function App() {
         {A && <StarCard st={A} tag={B ? "ORIGIN" : "SELECTED"} />}
         {B && <StarCard st={B} tag="DESTINATION" />}
 
-        {trip && (
+        {brief && (
           <div style={{ ...panel, padding: "12px 14px", borderColor: "rgba(232,180,90,0.5)" }}>
             <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em" }}>
               MISSION BRIEF · {journeyFrom.toUpperCase()} → {journeyTo.toUpperCase()}
@@ -714,10 +807,10 @@ export default function App() {
               ))}
             </div>
             <div style={{ ...mono, fontSize: 12, lineHeight: 2, color: "#c3cfe6" }}>
-              <div>ship time <span style={{ float: "right", color: "#fff" }}>{fmtYears(trip.shipYears)}</span></div>
-              <div>Earth time <span style={{ float: "right", color: "#fff" }}>{fmtYears(trip.earthYears)}</span></div>
-              <div>peak speed <span style={{ float: "right", color: "#fff" }}>{(trip.betaMax * 100).toFixed(trip.betaMax > 0.99 ? 4 : 1)}% c</span></div>
-              <div>peak γ <span style={{ float: "right", color: "#fff" }}>{fmt(trip.gammaMax, 2)}×</span></div>
+              <div>ship time <span style={{ float: "right", color: "#fff" }}>{fmtYears(brief.shipYears)}</span></div>
+              <div>Earth time <span style={{ float: "right", color: "#fff" }}>{fmtYears(brief.earthYears)}</span></div>
+              <div>peak speed <span style={{ float: "right", color: "#fff" }}>{(brief.betaMax * 100).toFixed(brief.betaMax > 0.99 ? 4 : 1)}% c</span></div>
+              <div>peak γ <span style={{ float: "right", color: "#fff" }}>{fmt(brief.gammaMax, 2)}×</span></div>
               <div style={{ borderTop: "1px solid rgba(232,180,90,0.2)", marginTop: 4, paddingTop: 4, color: "#66779a", fontSize: 11 }}>
                 at Voyager 1 speed <span style={{ float: "right" }}>{fmtYears(voyYears)}</span>
               </div>
@@ -762,9 +855,39 @@ export default function App() {
         )}
       </div>
 
+      {/* Trip instrument bar */}
+      {shipView && trip && (
+        <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", ...panel, padding: "10px 16px", width: 620, borderColor: "rgba(232,180,90,0.5)" }}>
+          <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em" }}>
+            TRIP · SUN → {trip.name.toUpperCase()} · {fmt(trip.D, 2)} LY · CONSTANT {accel} g
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+            <button onClick={() => stateRef.current.setTripPlaying?.(!tripPlaying)}
+              style={{ ...mono, fontSize: 13, width: 34, padding: "3px 0", background: "rgba(232,180,90,0.18)", border: "1px solid rgba(232,180,90,0.6)", color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
+              {tripPlaying ? "⏸" : "▶"}
+            </button>
+            <input type="range" min="0" max="1000" value={Math.round((tripUi?.frac ?? 0) * 1000)}
+              onChange={(e) => stateRef.current.setTripFrac?.(Number(e.target.value) / 1000)}
+              style={{ flex: 1, accentColor: AMBER }} />
+            <span style={{ ...mono, fontSize: 11, color: "#9fb0cf", minWidth: 64, textAlign: "right" }}>
+              {fmt(tripUi?.distLy ?? 0, 1)} ly
+            </span>
+          </div>
+          {tripUi && (
+            <div style={{ ...mono, fontSize: 11.5, color: "#c3cfe6", display: "flex", justifyContent: "space-between", marginTop: 8 }}>
+              <span>ship <span style={{ color: "#fff" }}>{fmtYears(tripUi.shipYears)}</span></span>
+              <span>Earth <span style={{ color: "#fff" }}>{fmtYears(tripUi.earthYears)}</span></span>
+              <span>speed <span style={{ color: "#fff" }}>{(tripUi.beta * 100).toFixed(tripUi.beta > 0.99 ? 3 : 1)}% c</span></span>
+              <span>γ <span style={{ color: "#fff" }}>{fmt(tripUi.gamma, 2)}×</span></span>
+              {tripUi.frac >= 1 && <span style={{ color: AMBER }}>ARRIVED</span>}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Hover readout */}
       {hoveredStar && (
-        <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", ...panel, padding: "6px 14px", ...mono, fontSize: 12, color: "#dfe6f2", whiteSpace: "nowrap" }}>
+        <div style={{ position: "absolute", bottom: shipView && trip ? 118 : 16, left: "50%", transform: "translateX(-50%)", ...panel, padding: "6px 14px", ...mono, fontSize: 12, color: "#dfe6f2", whiteSpace: "nowrap" }}>
           {hoveredStar.name ?? `Star #${hoveredStar.i}`} · {hoveredStar.spect ?? "—"} · {fmt(hoveredStar.ly, 1)} ly ·{" "}
           <span style={{ color: hoveredStar.rv < 0 ? ICE : "#e8a07a" }}>
             {hoveredStar.rv < 0 ? "−" : "+"}{fmt(Math.abs(hoveredStar.rv), 1)} km/s

@@ -12,6 +12,30 @@ export function journey(distLy, accelG) {
   return { shipYears, earthYears, betaMax, gammaMax: X };
 }
 
+// Waypoint state at fraction f (by distance) of a brachistochrone of total
+// distance D ly at accelG. c = 1 ly/yr units. Accelerate to midpoint, flip,
+// decelerate: for the accel half at distance x, X = 1 + a·x gives gamma
+// directly; tau = acosh(X)/a ship years, t = sqrt(X^2-1)/a Earth years.
+// The decel half mirrors: total minus the remaining-distance leg.
+export function brachAt(distLy, accelG, f) {
+  const a = accelG * G_LY_YR2;
+  const x = Math.max(0, Math.min(1, f)) * distLy;
+  const Xm = 1 + (a * distLy) / 2; // midpoint gamma
+  let gamma, shipYears, earthYears;
+  if (x <= distLy / 2) {
+    gamma = 1 + a * x;
+    shipYears = Math.acosh(gamma) / a;
+    earthYears = Math.sqrt(gamma * gamma - 1) / a;
+  } else {
+    const rem = 1 + a * (distLy - x); // gamma at the mirrored point
+    gamma = rem;
+    shipYears = (2 * Math.acosh(Xm) - Math.acosh(rem)) / a;
+    earthYears = (2 * Math.sqrt(Xm * Xm - 1) - Math.sqrt(rem * rem - 1)) / a;
+  }
+  const beta = Math.sqrt(gamma * gamma - 1) / gamma;
+  return { shipYears, earthYears, beta, gamma };
+}
+
 // Closure rate from full 3D velocities (km/s): d/dt |posB - posA|.
 // Negative = closing. This is the upgrade over the prototype's
 // radial-velocity-only estimate — Tier 1 carries true velocity vectors.

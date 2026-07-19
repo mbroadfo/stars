@@ -29,6 +29,8 @@ export default function App() {
   const [fps, setFps] = useState(0);
   const [farCount, setFarCount] = useState(0);
   const [showHelp, setShowHelp] = useState(true);
+  const [shipView, setShipView] = useState(false); // Traveler's Sky mode
+  const [shipFovUi, setShipFovUi] = useState(60);
 
   useEffect(() => {
     loadCatalog().then(setCat).catch((e) => setLoadError(String(e)));
@@ -67,6 +69,29 @@ export default function App() {
     s.phi = Math.PI * 0.38;   // polar
     s.camera = camera;
     s.renderer = renderer;
+
+    // Ship view (Traveler's Sky): camera AT a position looking outward.
+    s.mode = "atlas";
+    s.shipPos = new THREE.Vector3(0, 0, 0); // the Sun, until trips move it
+    s.shipYaw = 0; s.shipPitch = 0; s.shipFov = 60;
+    s.targetIdx = null;
+    s.enterShip = (idx) => {
+      s.targetIdx = idx;
+      const o = idx * STRIDE;
+      const dx = cat.data[o], dy = cat.data[o + 1], dz = cat.data[o + 2];
+      const len = Math.hypot(dx, dy, dz);
+      s.shipYaw = Math.atan2(dz, dx);
+      s.shipPitch = Math.asin(dy / len);
+      s.shipFov = 60;
+      s.mode = "ship";
+      setShipView(true);
+    };
+    s.exitShip = () => {
+      s.mode = "atlas";
+      camera.fov = 55;
+      camera.updateProjectionMatrix();
+      setShipView(false);
+    };
 
     // --- Star field: one draw call over the whole Tier 1 buffer ---
     const n = cat.count;
@@ -167,6 +192,27 @@ export default function App() {
     scene.add(mkDashedRing(52000, 2600, 1800, 0.45)); // disk edge
     scene.add(mkDashedRing(9800, 900, 700, 0.3));     // bulge region
 
+    // --- Constellation / asterism lines — every endpoint is a real tier1
+    // star, so the figures deform under pure perspective as the camera moves.
+    if (cat.asterisms) {
+      const segs = [];
+      for (const c of Object.values(cat.asterisms.constellations)) {
+        for (const [i, j] of c.lines) {
+          segs.push(
+            cat.data[i * STRIDE], cat.data[i * STRIDE + 1], cat.data[i * STRIDE + 2],
+            cat.data[j * STRIDE], cat.data[j * STRIDE + 1], cat.data[j * STRIDE + 2],
+          );
+        }
+      }
+      const astGeo = new THREE.BufferGeometry();
+      astGeo.setAttribute("position", new THREE.Float32BufferAttribute(segs, 3));
+      const astLines = new THREE.LineSegments(astGeo, new THREE.LineBasicMaterial({
+        color: 0x5f7099, transparent: true, opacity: 0.38, depthWrite: false,
+      }));
+      astLines.frustumCulled = false;
+      scene.add(astLines);
+    }
+
     // --- Sun marker (rides the same shader; mag -2 renders as a bright core) ---
     const sunGeo = new THREE.BufferGeometry();
     sunGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array([0, 0, 0]), 3));
@@ -233,6 +279,19 @@ export default function App() {
     const sunLabel = mkTag("SUN", "#ffe9b8");
     const sgrLabel = mkTag("SGR A* · GALACTIC CENTER · 26,000 ly", "#c9a3ff");
     const edgeLabel = mkTag("MILKY WAY EDGE · ~100,000 LY ACROSS · OUTLINE ILLUSTRATIVE", "#5a6a8f");
+
+    // Ship-view target reticle + offscreen pointer
+    const reticle = document.createElement("div");
+    reticle.style.cssText = `position:absolute;width:34px;height:34px;border:1.5px solid ${AMBER};
+      border-radius:50%;transform:translate(-50%,-50%);pointer-events:none;display:none;
+      box-shadow:0 0 12px rgba(232,180,90,0.35);`;
+    labelHost.appendChild(reticle);
+    const retTag = mkTag("", AMBER);
+    const offArrow = document.createElement("div");
+    offArrow.textContent = "➤";
+    offArrow.style.cssText = `position:absolute;color:${AMBER};font-size:20px;pointer-events:none;
+      display:none;text-shadow:0 0 8px rgba(232,180,90,0.6);`;
+    labelHost.appendChild(offArrow);
     const ringLabels = ringRadii.map((r) => mkTag(r.toLocaleString() + " ly", "#5a6a8f"));
 
     // ---------------- Interaction ----------------
@@ -250,7 +309,13 @@ export default function App() {
       }
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       moved += Math.abs(dx) + Math.abs(dy);
-      if (drag.btn === 2 || drag.shift) {
+      if (s.mode === "ship") {
+        // Grab-the-sky look-around; sensitivity tracks FOV so zoomed-in
+        // panning stays controllable.
+        const k = 0.0022 * (s.shipFov / 60);
+        s.shipYaw -= dx * k;
+        s.shipPitch = Math.max(-1.55, Math.min(1.55, s.shipPitch + dy * k));
+      } else if (drag.btn === 2 || drag.shift) {
         panBy(dx, dy);
       } else {
         s.theta -= dx * 0.0055;
@@ -273,6 +338,10 @@ export default function App() {
     };
     const onWheel = (e) => {
       e.preventDefault();
+      if (s.mode === "ship") {
+        s.shipFov = Math.max(25, Math.min(100, s.shipFov * Math.pow(1.0012, e.deltaY)));
+        return;
+      }
       s.radius *= Math.pow(1.0016, e.deltaY);
       s.radius = Math.max(0.4, Math.min(220000, s.radius));
     };
@@ -365,7 +434,10 @@ export default function App() {
       raf = requestAnimationFrame(animate);
       const dt = clock.getDelta();
       frames++; fpsT += dt;
-      if (fpsT >= 1) { setFps(Math.round(frames / fpsT)); frames = 0; fpsT = 0; }
+      if (fpsT >= 1) {
+        setFps(Math.round(frames / fpsT)); frames = 0; fpsT = 0;
+        if (s.mode === "ship") setShipFovUi(Math.round(s.shipFov));
+      }
       if (s.flyAnim) {
         const f = s.flyAnim; f.t += dt / f.dur;
         const k = easeInOut(Math.min(1, f.t));
@@ -373,19 +445,69 @@ export default function App() {
         s.radius = f.fromRadius * Math.pow(f.toRadius / f.fromRadius, k);
         if (f.t >= 1) s.flyAnim = null;
       }
-      const sp = Math.sin(s.phi), cp = Math.cos(s.phi);
-      camera.position.set(
-        s.target.x + s.radius * sp * Math.cos(s.theta),
-        s.target.y + s.radius * cp,
-        s.target.z + s.radius * sp * Math.sin(s.theta)
-      );
-      camera.lookAt(s.target);
-      camera.near = Math.max(0.02, s.radius * 0.002);
-      camera.far = Math.max(300000, s.radius * 10);
-      camera.updateProjectionMatrix();
+      if (s.mode === "ship") {
+        camera.position.copy(s.shipPos);
+        const cpt = Math.cos(s.shipPitch);
+        labelPos.set(
+          s.shipPos.x + cpt * Math.cos(s.shipYaw),
+          s.shipPos.y + Math.sin(s.shipPitch),
+          s.shipPos.z + cpt * Math.sin(s.shipYaw)
+        );
+        camera.lookAt(labelPos);
+        camera.fov = s.shipFov;
+        camera.near = 0.01;
+        camera.far = 400000;
+        camera.updateProjectionMatrix();
+      } else {
+        const sp = Math.sin(s.phi), cp = Math.cos(s.phi);
+        camera.position.set(
+          s.target.x + s.radius * sp * Math.cos(s.theta),
+          s.target.y + s.radius * cp,
+          s.target.z + s.radius * sp * Math.sin(s.theta)
+        );
+        camera.lookAt(s.target);
+        camera.near = Math.max(0.02, s.radius * 0.002);
+        camera.far = Math.max(300000, s.radius * 10);
+        camera.updateProjectionMatrix();
+      }
 
-      // labels
-      const dense = s.radius;
+      // labels — in ship view use a fixed "neighborhood" density so bright
+      // and nearby star labels show; ring/galaxy tags hide themselves.
+      const dense = s.mode === "ship" ? 200 : s.radius;
+
+      // ship-view target reticle
+      if (s.mode === "ship" && s.targetIdx != null) {
+        const o = s.targetIdx * STRIDE;
+        const v = labelPos.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]).project(camera);
+        const rect2 = el.getBoundingClientRect();
+        const onScreen = v.z <= 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
+        if (onScreen) {
+          reticle.style.display = "block";
+          offArrow.style.display = "none";
+          reticle.style.left = `${(v.x * 0.5 + 0.5) * rect2.width}px`;
+          reticle.style.top = `${(-v.y * 0.5 + 0.5) * rect2.height}px`;
+          const tName = cat.nameByIndex.get(s.targetIdx)?.name ?? `Star #${s.targetIdx}`;
+          retTag.textContent = tName.toUpperCase();
+          projTag(retTag, labelPos.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]));
+          retTag.style.transform = "translate(-50%, 130%)";
+        } else {
+          reticle.style.display = "none";
+          retTag.style.display = "none";
+          let nx = v.x, ny = v.y;
+          if (v.z > 1) { nx = -nx; ny = -ny; } // behind the camera: flip
+          const mag = Math.max(Math.abs(nx), Math.abs(ny), 1e-6);
+          nx = (nx / mag) * 0.88; ny = (ny / mag) * 0.88;
+          const deg = (Math.atan2(-ny, nx) * 180) / Math.PI;
+          offArrow.style.display = "block";
+          offArrow.style.left = `${(nx * 0.5 + 0.5) * rect2.width}px`;
+          offArrow.style.top = `${(-ny * 0.5 + 0.5) * rect2.height}px`;
+          offArrow.style.transform = `translate(-50%,-50%) rotate(${deg}deg)`;
+        }
+      } else {
+        reticle.style.display = "none";
+        offArrow.style.display = "none";
+        retTag.style.display = "none";
+      }
       labelEls.forEach(({ el: le, star }) => {
         const show =
           star.tier === "bright" ? dense < 9000 || star.mag < 0.8 :
@@ -395,8 +517,12 @@ export default function App() {
         projTag(le, labelPos.set(star.x, star.y, star.z));
         le.style.opacity = star.tier !== "bright" && dense > 150 ? 0.55 : 0.9;
       });
-      projTag(sunLabel, labelPos.set(0, 0, 0));
-      sunLabel.style.display = dense < 200000 ? sunLabel.style.display : "none";
+      if (s.mode === "ship" && s.shipPos.lengthSq() < 0.01) {
+        sunLabel.style.display = "none"; // can't label the place you're standing
+      } else {
+        projTag(sunLabel, labelPos.set(0, 0, 0));
+        sunLabel.style.display = dense < 200000 ? sunLabel.style.display : "none";
+      }
       projTag(sgrLabel, GAL_CENTER);
       if (dense < 3000) sgrLabel.style.display = "none";
       projTag(edgeLabel, labelPos.set(GAL_CENTER.x, 0, -52000));
@@ -529,14 +655,29 @@ export default function App() {
             <>loading 123,018 stars…</>
           )}
         </div>
-        <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-          {[["Neighborhood", 60], ["Bright stars", 1600], ["Whole galaxy", 95000]].map(([label, r]) => (
-            <button key={label} onClick={() => flyTo(new THREE.Vector3(0, 0, 0), r)}
-              style={{ ...mono, fontSize: 10.5, padding: "4px 9px", background: "rgba(232,180,90,0.1)", border: "1px solid rgba(232,180,90,0.35)", color: "#e8c88a", borderRadius: 4, cursor: "pointer" }}>
-              {label}
+        {shipView ? (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em" }}>
+              SHIP VIEW · FROM THE SUN · FOV {shipFovUi}°
+            </div>
+            <div style={{ ...mono, fontSize: 10.5, color: "#8fa0c0", marginTop: 4 }}>
+              drag — look around · scroll — zoom field of view
+            </div>
+            <button onClick={() => stateRef.current.exitShip?.()}
+              style={{ ...mono, fontSize: 10.5, marginTop: 8, padding: "4px 10px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
+              ← Back to atlas
             </button>
-          ))}
-        </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+            {[["Neighborhood", 60], ["Bright stars", 1600], ["Whole galaxy", 95000]].map(([label, r]) => (
+              <button key={label} onClick={() => flyTo(new THREE.Vector3(0, 0, 0), r)}
+                style={{ ...mono, fontSize: 10.5, padding: "4px 9px", background: "rgba(232,180,90,0.1)", border: "1px solid rgba(232,180,90,0.35)", color: "#e8c88a", borderRadius: 4, cursor: "pointer" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Selection + journey panel */}
@@ -580,6 +721,14 @@ export default function App() {
             <div style={{ ...mono, fontSize: 10, color: "#5a6a8f", marginTop: 8, lineHeight: 1.5 }}>
               Constant-{accel} g brachistochrone: accelerate to midpoint, flip, decelerate. Ship time is what the crew ages.
             </div>
+            {!shipView && (
+              <button onClick={() => stateRef.current.enterShip?.(selected[1] ?? selected[0])}
+                style={{ ...mono, fontSize: 11, marginTop: 10, marginRight: 6, padding: "5px 12px",
+                  background: "rgba(232,180,90,0.22)", border: "1px solid rgba(232,180,90,0.7)",
+                  color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
+                ◉ Ship view → {(journeyTo ?? "").toUpperCase()}
+              </button>
+            )}
             <button onClick={() => setSelected([])}
               style={{ ...mono, fontSize: 10.5, marginTop: 10, padding: "4px 10px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
               Clear selection

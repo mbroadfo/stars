@@ -32,6 +32,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from asterisms import LINES, CONSTELLATION_NAMES, MAX_LINE_MAG
+
 BASE_URL = "https://raw.githubusercontent.com/astronexus/ATHYG-Database/main/data"
 PARTS = ["athyg_v32-1.csv.gz", "athyg_v32-2.csv.gz"]
 
@@ -194,6 +196,56 @@ def build_ids(culled: pd.DataFrame, far_df: pd.DataFrame):
     return t1_ids, t2_ids, desig, constellations
 
 
+def build_asterisms(culled: pd.DataFrame) -> dict:
+    """Resolve curated (con, bayer) line endpoints to tier1 buffer indices.
+
+    Exact bayer match first; superscripted catalog entries ("Zet2") match by
+    prefix, brightest wins. Unresolvable or too-dim endpoints drop their line
+    with a warning — a curation slip must never draw a wrong line silently.
+    """
+    named = culled[culled["bayer"].notna()]
+    exact: dict = {}
+    prefix: dict = {}
+    for idx, row in named.iterrows():
+        exact.setdefault((row.con, row.bayer), idx)
+        key = (row.con, row.bayer.split("-")[0].rstrip("0123456789"))
+        cur = prefix.get(key)
+        if cur is None or row.mag < culled.at[cur, "mag"]:
+            prefix[key] = idx
+
+    def resolve(con: str, bayer: str):
+        idx = exact.get((con, bayer))
+        if idx is None:
+            idx = prefix.get((con, bayer))
+        if idx is None:
+            return None, f"{bayer} {con}: not in tier1"
+        if culled.at[idx, "mag"] > MAX_LINE_MAG:
+            return None, f"{bayer} {con}: too dim (mag {culled.at[idx, 'mag']:.1f})"
+        return int(idx), None
+
+    by_con: dict = {}
+    dropped = []
+    for con_a, bay_a, con_b, bay_b in LINES:
+        ia, err_a = resolve(con_a, bay_a)
+        ib, err_b = resolve(con_b, bay_b)
+        if ia is None or ib is None:
+            dropped.append(err_a or err_b)
+            continue
+        by_con.setdefault(con_a, []).append([ia, ib])
+    for err in dropped:
+        print(f"  WARNING asterism endpoint dropped: {err}")
+    n_lines = sum(len(v) for v in by_con.values())
+    print(f"  asterisms: {n_lines} lines across {len(by_con)} constellations"
+          f" ({len(dropped)} dropped)")
+    return {
+        "constellations": {
+            con: {"name": CONSTELLATION_NAMES.get(con, con), "lines": lines}
+            for con, lines in sorted(by_con.items())
+        },
+        "line_count": n_lines,
+    }
+
+
 def write_outputs(packed: np.ndarray, culled: pd.DataFrame,
                   far: np.ndarray, far_df: pd.DataFrame) -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -214,6 +266,11 @@ def write_outputs(packed: np.ndarray, culled: pd.DataFrame,
     (OUT_DIR / "tier2_ids.bin").write_bytes(t2_ids_buf)
     (OUT_DIR / "desig.json").write_text(
         json.dumps(desig, indent=0, sort_keys=False), encoding="utf-8"
+    )
+
+    asterisms = build_asterisms(culled)
+    (OUT_DIR / "asterisms.json").write_text(
+        json.dumps(asterisms, indent=0), encoding="utf-8"
     )
 
     named = culled[culled["proper"].notna()]
@@ -272,6 +329,12 @@ def write_outputs(packed: np.ndarray, culled: pd.DataFrame,
             "desig_count": len(desig),
         },
         "constellations": constellations,
+        "asterisms": {
+            "file": "asterisms.json",
+            "line_count": asterisms["line_count"],
+            "constellation_count": len(asterisms["constellations"]),
+            "source": "hand-curated classic western figures, resolved via AT-HYG con+bayer",
+        },
     }
     (OUT_DIR / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"

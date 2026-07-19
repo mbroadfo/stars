@@ -13,9 +13,10 @@ async function fetchJson(url) {
 }
 
 export async function loadCatalog(base = "/data/tier1") {
-  const [manifest, names] = await Promise.all([
+  const [manifest, names, asterisms] = await Promise.all([
     fetchJson(`${base}/manifest.json`),
     fetchJson(`${base}/names.json`),
+    fetchJson(`${base}/asterisms.json`).catch(() => null), // absent on stale data
   ]);
   const r = await fetch(`${base}/tier1.bin`);
   if (!r.ok) throw new Error(`${base}/tier1.bin: HTTP ${r.status}`);
@@ -36,7 +37,7 @@ export async function loadCatalog(base = "/data/tier1") {
   const nameByIndex = new Map();
   for (const [k, v] of Object.entries(names)) nameByIndex.set(Number(k), v);
 
-  return { data, count, manifest, nameByIndex };
+  return { data, count, manifest, nameByIndex, asterisms };
 }
 
 // Tier 2 far field: real stars 3,000-50,000 ly, 5 floats/star —

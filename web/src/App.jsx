@@ -206,11 +206,14 @@ export default function App() {
       }
       const astGeo = new THREE.BufferGeometry();
       astGeo.setAttribute("position", new THREE.Float32BufferAttribute(segs, 3));
-      const astLines = new THREE.LineSegments(astGeo, new THREE.LineBasicMaterial({
-        color: 0x5f7099, transparent: true, opacity: 0.38, depthWrite: false,
-      }));
+      const astMat = new THREE.LineBasicMaterial({
+        color: 0x8fa5d8, transparent: true, opacity: 0.55,
+        depthWrite: false, blending: THREE.AdditiveBlending,
+      });
+      const astLines = new THREE.LineSegments(astGeo, astMat);
       astLines.frustumCulled = false;
       scene.add(astLines);
+      s.astMat = astMat; // ship view boosts these — they're the point there
     }
 
     // --- Sun marker (rides the same shader; mag -2 renders as a bright core) ---
@@ -474,6 +477,7 @@ export default function App() {
       // labels — in ship view use a fixed "neighborhood" density so bright
       // and nearby star labels show; ring/galaxy tags hide themselves.
       const dense = s.mode === "ship" ? 200 : s.radius;
+      if (s.astMat) s.astMat.opacity = s.mode === "ship" ? 0.8 : 0.5;
 
       // ship-view target reticle
       if (s.mode === "ship" && s.targetIdx != null) {

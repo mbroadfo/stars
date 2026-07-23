@@ -40,6 +40,8 @@ export default function App() {
   const [gateLy, setGateLy] = useState(100);
   const [navOpen, setNavOpen] = useState(true);
   const [secs, setSecs] = useState({ atlas: true, origin: true, dest: true, brief: true });
+  const [viewOpen, setViewOpen] = useState(true);
+  const [tripOpen, setTripOpen] = useState(true);
 
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
@@ -87,16 +89,20 @@ export default function App() {
 
     // Ship view (Traveler's Sky): camera AT a position looking outward.
     s.mode = "atlas";
-    s.shipPos = new THREE.Vector3(0, 0, 0); // the Sun, until trips move it
+    s.shipPos = new THREE.Vector3(0, 0, 0); // the origin — the Sun until enterShip says otherwise
     s.shipYaw = 0; s.shipPitch = 0; s.shipFov = 60;
     s.targetIdx = null;
-    s.enterShip = (idx) => {
+    s.originIdx = null; // null = Sun; otherwise a tier1 star index the ship departs from
+    const starPos = (idx) => new THREE.Vector3(cat.data[idx * STRIDE], cat.data[idx * STRIDE + 1], cat.data[idx * STRIDE + 2]);
+    s.enterShip = (idx, originIdx = null) => {
       s.targetIdx = idx;
-      const o = idx * STRIDE;
-      const dx = cat.data[o], dy = cat.data[o + 1], dz = cat.data[o + 2];
-      const len = Math.hypot(dx, dy, dz);
-      s.shipYaw = Math.atan2(dz, dx);
-      s.shipPitch = Math.asin(dy / len);
+      s.originIdx = originIdx;
+      const originPos = originIdx != null ? starPos(originIdx) : new THREE.Vector3(0, 0, 0);
+      s.shipPos.copy(originPos);
+      const rel = starPos(idx).sub(originPos);
+      const len = rel.length();
+      s.shipYaw = Math.atan2(rel.z, rel.x);
+      s.shipPitch = Math.asin(rel.y / len);
       s.shipFov = 60;
       s.mode = "ship";
       setShipView(true);
@@ -104,6 +110,7 @@ export default function App() {
     s.exitShip = () => {
       s.mode = "atlas";
       s.trip = null;
+      s.originIdx = null;
       s.shipPos.set(0, 0, 0);
       camera.fov = 55;
       camera.updateProjectionMatrix();
@@ -112,11 +119,35 @@ export default function App() {
     };
     s.startTrip = () => {
       if (s.mode !== "ship" || s.targetIdx == null) return;
-      const o = s.targetIdx * STRIDE;
-      const to = new THREE.Vector3(cat.data[o], cat.data[o + 1], cat.data[o + 2]);
-      s.trip = { from: new THREE.Vector3(0, 0, 0), to, D: to.length(), frac: 0, playing: true, durSec: 40 };
-      setTrip({ D: s.trip.D, name: cat.nameByIndex.get(s.targetIdx)?.name ?? `Star #${s.targetIdx}` });
+      const from = s.shipPos.clone(); // wherever the ship is currently parked — Sun or origin star
+      const to = starPos(s.targetIdx);
+      s.trip = { from, to, D: to.distanceTo(from), frac: 0, playing: true, durSec: 40 };
+      const originName = s.originIdx != null ? (cat.nameByIndex.get(s.originIdx)?.name ?? `Star #${s.originIdx}`) : "Sun";
+      setTrip({ D: s.trip.D, name: cat.nameByIndex.get(s.targetIdx)?.name ?? `Star #${s.targetIdx}`, originName });
       setTripPlaying(true);
+    };
+    // Swap origin/destination — works before a trip starts (re-parks the ship
+    // at the new origin) and mid-trip, playing or paused (flips from/to and
+    // mirrors frac -> 1-frac, which lands on the exact same position and
+    // gamma by construction — the accelerate-to-midpoint-decelerate profile
+    // is symmetric, so this is a relabeling, not a physical discontinuity).
+    s.swapView = (newDestIdx, newOriginIdx) => {
+      if (s.mode !== "ship") return;
+      if (s.trip) {
+        const T = s.trip;
+        const newFrom = T.to, newTo = T.from;
+        T.from = newFrom; T.to = newTo; T.frac = 1 - T.frac;
+        s.originIdx = newOriginIdx; s.targetIdx = newDestIdx;
+        const rel = newTo.clone().sub(s.shipPos);
+        const len = rel.length();
+        s.shipYaw = Math.atan2(rel.z, rel.x);
+        s.shipPitch = Math.asin(rel.y / len);
+        const originName = newOriginIdx != null ? (cat.nameByIndex.get(newOriginIdx)?.name ?? `Star #${newOriginIdx}`) : "Sun";
+        const destName = cat.nameByIndex.get(newDestIdx)?.name ?? `Star #${newDestIdx}`;
+        setTrip((t) => (t ? { ...t, name: destName, originName } : t));
+      } else {
+        s.enterShip(newDestIdx, newOriginIdx);
+      }
     };
     s.setTripFrac = (f) => {
       if (!s.trip) return;
@@ -151,14 +182,15 @@ export default function App() {
         a*=vFade;
         if(a<0.02) discard;
         gl_FragColor=vec4(mix(vColor,vec3(1.0),core*0.7),a); }`;
-    // Sky filters, applied only in ship view: uMagLimit culls below the
-    // naked-eye threshold as seen FROM THE SHIP (realism, not decoration);
-    // uGate fades stars beyond a chosen distance (a labeled instrument
-    // filter, like range gating on radar).
+    // Sky filters — work in both modes: uMagLimit culls below the naked-eye
+    // threshold as seen from the ship in ship view, or from the Sun (the
+    // catalog's real Earth-apparent magnitude) in atlas view; uGate fades
+    // stars beyond a chosen distance from the same reference point (a
+    // labeled instrument filter, like range gating on radar). mGate/dGate
+    // are set per-mode by each material below; fade/vFade always apply.
     const SKY_FILTER = `
-      float fade = 1.0;
-      if (uMagLimit < 50.0) fade *= 1.0 - smoothstep(uMagLimit - 1.0, uMagLimit + 0.5, m);
-      if (uGate > 0.0) fade *= 1.0 - 0.9 * smoothstep(uGate * 0.8, uGate * 1.3, dShip);
+      if (uMagLimit < 50.0) fade *= 1.0 - smoothstep(uMagLimit - 1.0, uMagLimit + 0.5, mGate);
+      if (uGate > 0.0) fade *= 1.0 - 0.9 * smoothstep(uGate * 0.8, uGate * 1.3, dGate);
       vFade = fade;`;
     // 5/ln(10) — GLSL log() is natural log.
     const LOG10x5 = "2.171472409516";
@@ -179,14 +211,20 @@ export default function App() {
         uniform float uMagLimit; uniform float uGate;
         attribute float mag; varying vec3 vColor; varying float vMag; varying float vFade;
         void main(){ vColor=color;
+          float dSun = max(length(position), 0.001);
           float m = mag;
-          vFade = 1.0;
+          float mGate = m;
+          float dGate = dSun;
+          float fade = 1.0;
           if (uShip > 0.5) {
-            float dSun = max(length(position), 0.001);
-            float dShip = max(distance(position, uShipPos), 0.05);
+            float rawD = distance(position, uShipPos);
+            float dShip = max(rawD, 0.05);
             m = mag + ${LOG10x5} * log(dShip / dSun);
-            ${SKY_FILTER}
+            mGate = m;
+            dGate = dShip;
+            if (rawD < 0.05) fade = 0.0; // standing on this star — don't render its own point
           }
+          ${SKY_FILTER}
           vMag = m;
           vec4 mv=modelViewMatrix*vec4(position,1.0);
           gl_PointSize=clamp(15.5-2.2*m, 1.6, 19.0);
@@ -204,17 +242,24 @@ export default function App() {
         uniform float uMagLimit; uniform float uGate;
         attribute float absmag; varying vec3 vColor; varying float vMag; varying float vFade;
         void main(){ vColor=color;
-          float sz; float m;
-          vFade = 1.0;
+          float dSun = max(length(position), 0.001);
+          float sz; float m; float mGate; float dGate = dSun;
+          float fade = 1.0;
           if (uShip > 0.5) {
-            float dShip = max(distance(position, uShipPos), 0.05);
+            float rawD = distance(position, uShipPos);
+            float dShip = max(rawD, 0.05);
             m = absmag + ${LOG10x5} * log(dShip / 32.6156);
             sz = clamp(15.5-2.2*m, 1.0, 19.0);
-            ${SKY_FILTER}
+            mGate = m;
+            dGate = dShip;
+            if (rawD < 0.05) fade = 0.0; // standing on this star — don't render its own point
           } else {
             m = 4.0;
             sz = uAtlasSize > 0.0 ? uAtlasSize : clamp(3.2-0.35*absmag, 1.0, 5.0);
+            // filter-only magnitude: Sun-apparent, doesn't touch the default m/sz/vMag above
+            mGate = absmag + ${LOG10x5} * log(dSun / 32.6156);
           }
+          ${SKY_FILTER}
           vMag = m;
           vec4 mv=modelViewMatrix*vec4(position,1.0);
           gl_PointSize=sz;
@@ -562,8 +607,9 @@ export default function App() {
         }
       }
       const shipOn = s.mode === "ship" ? 1 : 0;
-      const magLimit = shipOn && s.skyMode === "eye" ? 6.5 : 99;
-      const gate = shipOn && s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
+      // filters apply in both modes now — ship-relative in ship view, Sun-relative in atlas view
+      const magLimit = s.skyMode === "eye" ? 6.5 : 99;
+      const gate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
       for (const m of s.shipMats) {
         m.uniforms.uShip.value = shipOn;
         m.uniforms.uShipPos.value.copy(s.shipPos);
@@ -636,6 +682,7 @@ export default function App() {
         retTag.style.display = "none";
       }
       labelEls.forEach(({ el: le, star }) => {
+        if (s.mode === "ship" && star.i === s.originIdx) { le.style.display = "none"; return; } // can't label the place you're standing
         const show =
           star.tier === "bright" ? dense < 9000 || star.mag < 0.8 :
           star.tier === "nearby" ? dense < 400 :
@@ -734,6 +781,10 @@ export default function App() {
     camDist < 2500 ? "the naked-eye bubble" :
     camDist < 40000 ? "the Orion Arm" : "the Milky Way";
 
+  // which zoom-preset bucket the live camera distance currently falls in —
+  // geometric midpoints between the three preset radii (60 / 1600 / 95000 ly)
+  const zoomPreset = camDist < 309.8 ? 60 : camDist < 12328.8 ? 1600 : 95000;
+
   const panel = {
     background: "rgba(6,10,20,0.82)",
     border: "1px solid rgba(232,180,90,0.25)",
@@ -817,75 +868,14 @@ export default function App() {
             <>loading 123,018 stars…</>
           )}
         </div>
-        {shipView ? (
+        {shipView && (
           <div style={{ marginTop: 10 }}>
             <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em" }}>
-              SHIP VIEW · FROM THE SUN · FOV {shipFovUi}°
+              SHIP VIEW · FROM {(journeyFrom ?? "THE SUN").toUpperCase()} · FOV {shipFovUi}°
             </div>
             <div style={{ ...mono, fontSize: 10.5, color: "#8fa0c0", marginTop: 4 }}>
               drag — look around · scroll — zoom field of view
             </div>
-            <div style={{ display: "flex", gap: 5, marginTop: 8, flexWrap: "wrap", alignItems: "center" }}>
-              <button onClick={() => setShowLines(!showLines)}
-                style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
-                  background: showLines ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
-                  border: `1px solid rgba(143,165,216,${showLines ? 0.6 : 0.25})`, color: "#aebde0" }}>
-                lines {showLines ? "on" : "off"}
-              </button>
-              {[["all", "ALL"], ["eye", "NAKED EYE"], ["gate", "RANGE GATE"]].map(([k, label]) => (
-                <button key={k} onClick={() => setSkyMode(k)}
-                  style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
-                    background: skyMode === k ? "rgba(232,180,90,0.25)" : "rgba(232,180,90,0.05)",
-                    border: `1px solid rgba(232,180,90,${skyMode === k ? 0.65 : 0.25})`, color: "#e8c88a" }}>
-                  {label}
-                </button>
-              ))}
-            </div>
-            {skyMode === "gate" && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-                <input type="range" min="10" max="500" step="10" value={gateLy}
-                  onChange={(e) => setGateLy(Number(e.target.value))}
-                  style={{ flex: 1, accentColor: AMBER }} />
-                <span style={{ ...mono, fontSize: 10.5, color: "#9fb0cf", minWidth: 52, textAlign: "right" }}>{gateLy} ly</span>
-              </div>
-            )}
-            {skyMode === "eye" && (
-              <div style={{ ...mono, fontSize: 9.5, color: "#5a6a8f", marginTop: 4 }}>
-                showing only stars visible to the naked eye from the ship (mag ≤ 6.5)
-              </div>
-            )}
-            {skyMode === "gate" && (
-              <div style={{ ...mono, fontSize: 9.5, color: "#5a6a8f", marginTop: 4 }}>
-                instrument filter: fading stars beyond the gate distance
-              </div>
-            )}
-            {!trip && (
-              <button onClick={() => stateRef.current.startTrip?.()}
-                style={{ ...mono, fontSize: 11, marginTop: 8, marginRight: 6, padding: "5px 12px",
-                  background: "rgba(232,180,90,0.22)", border: "1px solid rgba(232,180,90,0.7)",
-                  color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
-                ▶ Start trip · {accel} g
-              </button>
-            )}
-            <button onClick={() => stateRef.current.exitShip?.()}
-              style={{ ...mono, fontSize: 10.5, marginTop: 8, padding: "4px 10px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
-              ← Back to atlas
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-            {[["Neighborhood", 60], ["Bright stars", 1600], ["Whole galaxy", 95000]].map(([label, r]) => (
-              <button key={label} onClick={() => flyTo(new THREE.Vector3(0, 0, 0), r)}
-                style={{ ...mono, fontSize: 10.5, padding: "4px 9px", background: "rgba(232,180,90,0.1)", border: "1px solid rgba(232,180,90,0.35)", color: "#e8c88a", borderRadius: 4, cursor: "pointer" }}>
-                {label}
-              </button>
-            ))}
-            <button onClick={() => setShowLines(!showLines)}
-              style={{ ...mono, fontSize: 10.5, padding: "4px 9px", borderRadius: 4, cursor: "pointer",
-                background: showLines ? "rgba(143,165,216,0.18)" : "rgba(143,165,216,0.04)",
-                border: `1px solid rgba(143,165,216,${showLines ? 0.55 : 0.25})`, color: "#aebde0" }}>
-              lines {showLines ? "on" : "off"}
-            </button>
           </div>
         )}
         </Section>
@@ -894,6 +884,21 @@ export default function App() {
           <Section k="origin" title="ORIGIN">
             {B ? <StarCard st={A} /> : <SunCard />}
           </Section>
+        )}
+        {A && B && (
+          <div style={{ display: "flex", justifyContent: "center", padding: "6px 0" }}>
+            <button
+              onClick={() => {
+                const [oldOriginIdx, oldDestIdx] = selected;
+                setSelected(([a, b]) => [b, a]);
+                if (shipView) stateRef.current.swapView?.(oldOriginIdx, oldDestIdx);
+              }}
+              title="swap origin and destination"
+              style={{ ...mono, fontSize: 10, padding: "3px 10px", background: "none",
+                border: "1px solid rgba(232,180,90,0.35)", color: AMBER, borderRadius: 4, cursor: "pointer" }}>
+              ⇄ swap
+            </button>
+          </div>
         )}
         {A && (
           <Section k="dest" title="DESTINATION">
@@ -915,17 +920,7 @@ export default function App() {
                 <span style={{ color: "#66779a" }}> (full 3D velocities)</span>
               </div>
             )}
-            <div style={{ display: "flex", gap: 5, margin: "8px 0" }}>
-              {[0.5, 1, 2].map((g) => (
-                <button key={g} onClick={() => setAccel(g)}
-                  style={{ ...mono, fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
-                    background: accel === g ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
-                    border: `1px solid rgba(232,180,90,${accel === g ? 0.7 : 0.25})`, color: "#e8c88a" }}>
-                  {g} g
-                </button>
-              ))}
-            </div>
-            <div style={{ ...mono, fontSize: 12, lineHeight: 2, color: "#c3cfe6" }}>
+            <div style={{ ...mono, fontSize: 12, lineHeight: 2, color: "#c3cfe6", marginTop: 8 }}>
               <div>ship time <span style={{ float: "right", color: "#fff" }}>{fmtYears(brief.shipYears)}</span></div>
               <div>Earth time <span style={{ float: "right", color: "#fff" }}>{fmtYears(brief.earthYears)}</span></div>
               <div>peak speed <span style={{ float: "right", color: "#fff" }}>{(brief.betaMax * 100).toFixed(brief.betaMax > 0.99 ? 4 : 1)}% c</span></div>
@@ -937,27 +932,133 @@ export default function App() {
             <div style={{ ...mono, fontSize: 10, color: "#5a6a8f", marginTop: 8, lineHeight: 1.5 }}>
               Constant-{accel} g brachistochrone: accelerate to midpoint, flip, decelerate. Ship time is what the crew ages.
             </div>
-            {!shipView && (
-              <button onClick={() => stateRef.current.enterShip?.(selected[1] ?? selected[0])}
-                style={{ ...mono, fontSize: 11, marginTop: 10, marginRight: 6, padding: "5px 12px",
-                  background: "rgba(232,180,90,0.22)", border: "1px solid rgba(232,180,90,0.7)",
-                  color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
-                ◉ Ship view → {(journeyTo ?? "").toUpperCase()}
-              </button>
-            )}
-            <button onClick={() => setSelected([])}
-              style={{ ...mono, fontSize: 10.5, marginTop: 10, padding: "4px 10px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
-              Clear selection
-            </button>
           </Section>
         )}
       </div>
       )}
 
-      {/* Help — top right, first run only */}
-      {!A && showHelp && (
-        <div style={{ position: "absolute", top: 14, right: 14, width: 288 }}>
-          <div style={{ ...panel, padding: "12px 14px" }}>
+      {/* Right action rail — persistent controls, always visible regardless of console scroll state */}
+      <div style={{ position: "absolute", top: 14, right: 14, width: 196, display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ ...panel, padding: "9px 10px" }}>
+          <div onClick={() => setViewOpen((v) => !v)}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: viewOpen ? 7 : 0 }}>
+            <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>VIEW</span>
+            <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{viewOpen ? "▾" : "▸"}</span>
+          </div>
+          {viewOpen && (
+            <>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                {!shipView && [["Neighborhood", 60], ["Bright stars", 1600], ["Whole galaxy", 95000]].map(([label, r]) => (
+                  <button key={label} onClick={() => flyTo(new THREE.Vector3(0, 0, 0), r)}
+                    style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                      background: zoomPreset === r ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.1)",
+                      border: `1px solid rgba(232,180,90,${zoomPreset === r ? 0.7 : 0.35})`, color: "#e8c88a" }}>
+                    {label}
+                  </button>
+                ))}
+                <button onClick={() => setShowLines(!showLines)}
+                  style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                    background: showLines ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
+                    border: `1px solid rgba(143,165,216,${showLines ? 0.6 : 0.25})`, color: "#aebde0" }}>
+                  lines {showLines ? "on" : "off"}
+                </button>
+                {[["all", "ALL"], ["eye", "NAKED EYE"], ["gate", "RANGE GATE"]].map(([k, label]) => (
+                  <button key={k} onClick={() => setSkyMode(k)}
+                    style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                      background: skyMode === k ? "rgba(232,180,90,0.25)" : "rgba(232,180,90,0.05)",
+                      border: `1px solid rgba(232,180,90,${skyMode === k ? 0.65 : 0.25})`, color: "#e8c88a" }}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              {skyMode === "gate" && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 7 }}>
+                    <input type="range" min="10" max="500" step="10" value={gateLy}
+                      onChange={(e) => setGateLy(Number(e.target.value))}
+                      style={{ flex: 1, accentColor: AMBER }} />
+                    <span style={{ ...mono, fontSize: 10, color: "#9fb0cf", minWidth: 44, textAlign: "right" }}>{gateLy} ly</span>
+                  </div>
+                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 4 }}>
+                    fading stars beyond the gate distance from {shipView ? "the ship" : "the Sun"}
+                  </div>
+                </>
+              )}
+              {skyMode === "eye" && (
+                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
+                  naked-eye stars from {shipView ? "the ship" : "the Sun"} (mag ≤ 6.5)
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {selected.length > 0 && (
+          <div style={{ ...panel, padding: "9px 10px" }}>
+            <div style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em", marginBottom: 7 }}>SELECTION</div>
+            <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              {!shipView && brief && (
+                <button onClick={() => stateRef.current.enterShip?.(selected[1] ?? selected[0], B ? selected[0] : null)}
+                  style={{ ...mono, fontSize: 10, padding: "4px 8px",
+                    background: "rgba(232,180,90,0.22)", border: "1px solid rgba(232,180,90,0.7)",
+                    color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
+                  ◉ Ship view → {(journeyTo ?? "").toUpperCase()}
+                </button>
+              )}
+              <button onClick={() => setSelected([])}
+                style={{ ...mono, fontSize: 10, padding: "4px 8px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
+                Clear selection
+              </button>
+            </div>
+          </div>
+        )}
+
+        {brief && (
+          <div style={{ ...panel, padding: "9px 10px" }}>
+            <div style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em", marginBottom: 7 }}>ACCELERATION</div>
+            <div style={{ display: "flex", gap: 5 }}>
+              {[0.5, 1, 2].map((g) => (
+                <button key={g} onClick={() => setAccel(g)}
+                  style={{ ...mono, fontSize: 11, padding: "3px 10px", borderRadius: 4, cursor: "pointer",
+                    background: accel === g ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
+                    border: `1px solid rgba(232,180,90,${accel === g ? 0.7 : 0.25})`, color: "#e8c88a" }}>
+                  {g} g
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {shipView && (
+          <div style={{ ...panel, padding: "9px 10px" }}>
+            <div onClick={() => setTripOpen((v) => !v)}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: tripOpen ? 7 : 0 }}>
+              <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>TRIP</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{tripOpen ? "▾" : "▸"}</span>
+            </div>
+            {tripOpen && <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+              {!trip && (
+                <button onClick={() => stateRef.current.startTrip?.()}
+                  style={{ ...mono, fontSize: 10.5, padding: "5px 10px",
+                    background: "rgba(232,180,90,0.22)", border: "1px solid rgba(232,180,90,0.7)",
+                    color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
+                  ▶ Start trip · {accel} g
+                </button>
+              )}
+              <button onClick={() => stateRef.current.exitShip?.()}
+                style={{ ...mono, fontSize: 10, padding: "4px 8px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
+                ← Back to atlas
+              </button>
+            </div>}
+          </div>
+        )}
+      </div>
+
+      {/* Help — centered overlay, first run only */}
+      {showHelp && (
+        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(4,6,13,0.55)", zIndex: 10 }}
+          onClick={() => setShowHelp(false)}>
+          <div style={{ ...panel, padding: "18px 22px", width: 320 }} onClick={(e) => e.stopPropagation()}>
             <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em", marginBottom: 8 }}>HOW TO FLY</div>
             <div style={{ ...mono, fontSize: 11.5, color: "#9fb0cf", lineHeight: 1.9 }}>
               drag — orbit<br />
@@ -971,7 +1072,7 @@ export default function App() {
               Try: select Sirius, then Betelgeuse. Or zoom all the way out and find us.
             </div>
             <button onClick={() => setShowHelp(false)}
-              style={{ ...mono, fontSize: 10, marginTop: 8, padding: "3px 8px", background: "none", border: "1px solid rgba(143,211,255,0.25)", color: "#7f93b8", borderRadius: 4, cursor: "pointer" }}>
+              style={{ ...mono, fontSize: 10, marginTop: 12, padding: "5px 10px", background: "none", border: "1px solid rgba(143,211,255,0.35)", color: "#7f93b8", borderRadius: 4, cursor: "pointer" }}>
               dismiss
             </button>
           </div>
@@ -982,7 +1083,7 @@ export default function App() {
       {shipView && trip && (
         <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", ...panel, padding: "10px 16px", width: 620, borderColor: "rgba(232,180,90,0.5)" }}>
           <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em" }}>
-            TRIP · SUN → {trip.name.toUpperCase()} · {fmt(trip.D, 2)} LY · CONSTANT {accel} g
+            TRIP · {trip.originName.toUpperCase()} → {trip.name.toUpperCase()} · {fmt(trip.D, 2)} LY · CONSTANT {accel} g
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
             <button onClick={() => stateRef.current.setTripPlaying?.(!tripPlaying)}

@@ -127,8 +127,38 @@ arrow); trip engine (Start trip → play/pause/scrub a brachistochrone with
 live ship-time/Earth-time/β/γ instruments; GPU-computed apparent magnitudes
 from the ship's position; Sun marker carries real absmag 4.83). Verified:
 midpoint Sun→Vega reads 3.2 ship yr / 13.5 Earth yr / 99.742% c / γ 13.93;
-Lyra deforms and sheds Vega on arrival. Remaining: aberration/Doppler toggle
-(phase 2), label-collision + core-blowout polish, click-anything cards.
+Lyra deforms and sheds Vega on arrival.
+
+**Shipped 2026-07-24 — origin-aware ship view + persistent action rail:**
+ship view and trips now depart from the actual selected ORIGIN (the Sun by
+default, or star A once two stars are picked), not always the Sun —
+`enterShip`/`startTrip` and the sky-filter shaders take the origin's real
+position; the origin star's own point and name label are suppressed while
+standing on it (mirrors the existing Sun-label treatment). Swap
+origin/destination works any time in ship view, including mid-trip playing
+or paused — it flips `trip.from`/`to` and mirrors `frac → 1-frac`, landing
+on the identical position and γ (the brachistochrone profile is symmetric
+around its midpoint, so this is a relabeling, not a physical jump). All
+action buttons moved out of the left console (now pure telemetry) into a
+persistent right action rail — VIEW / SELECTION / ACCELERATION / TRIP —
+that stays visible regardless of what's expanded below, fixing buttons
+that were getting buried under scrollable content. NAKED EYE / RANGE GATE
+sky filters now also work in atlas (god) view, measured from the Sun
+(real catalog magnitude + `dSun`) since there's no single vantage point
+while free-orbiting. Zoom presets (Neighborhood/Bright stars/Whole galaxy)
+highlight by live camera distance instead of never indicating the current
+view. First-run help is now a centered dismissible overlay instead of a
+top-right panel that collided with the new rail.
+
+Remaining: aberration/Doppler toggle (phase 2), label-collision +
+core-blowout polish, click-anything identity cards, origin/destination
+name search (autocomplete over named + designated stars, with "Sun" as a
+permanent selectable entry — also closes the gap where the Sun can't be
+picked once two real stars are already selected), a mobile pass
+(look-around doesn't work mid-trip on mobile; trip controls are hard to
+reach/see), and a lines category filter (zodiac/circumpolar/etc. —
+deferred, no data model for it yet and "circumpolar" doesn't generalize
+cleanly now that ship view isn't Earth-locked).
 
 Pick two stars, press **Start Trip**, and ride a relativistic brachistochrone
 while the constellations deform, dissolve, and reassemble around you.
@@ -139,10 +169,12 @@ outward — and constellation lines drawn between real stars deform
 automatically under perspective as the ship moves. No simulation, no per-frame
 updates; the data does all the work.
 
-**Experience flow:** Planetarium button (view from the Sun, constellations
-drawn) → select destination → Start Trip → play/scrub a timeline along the
-route at 0.5/1/2 g while instruments tick ship time, Earth time, β, γ →
-arrival shows the destination's sky, with the Sun faded to an ordinary star.
+**Experience flow:** select a destination (Sun is the implicit origin), or
+select two stars to depart from the first — Ship view button (constellations
+drawn, looking outward from the origin) → Start Trip → play/scrub a timeline
+along the route at 0.5/1/2 g while instruments tick ship time, Earth time,
+β, γ → arrival shows the destination's sky, with the origin faded to an
+ordinary star (the Sun included, once you've left it).
 
 **Data groundwork (pipeline):**
 
@@ -172,9 +204,10 @@ arrival shows the destination's sky, with the Sun faded to an ordinary star.
 
 **Viewer:** mode `atlas | ship`; mouse-look + FOV zoom in ship view;
 constellation LineSegments layer visible in both modes; Start Trip button in
-the mission brief; timeline with play/pause/scrub. Riders while in these
-files: label collision handling at shallow view angles, zoom-dependent core
-brightness attenuation, click-anything identity cards (uses the ids buffers).
+the right action rail's TRIP group; timeline with play/pause/scrub. Riders
+while in these files: label collision handling at shallow view angles,
+zoom-dependent core brightness attenuation, click-anything identity cards
+(uses the ids buffers).
 
 **Gates:**
 

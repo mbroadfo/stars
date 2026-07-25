@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import React, { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import * as THREE from "three";
 import { loadCatalog, loadFarField, getStar, STRIDE, CI_SENTINEL } from "./lib/catalog.js";
 import { journey, brachAt, closureRate, separationLy, fmt, fmtYears, KM_PER_LY } from "./lib/physics.js";
@@ -15,6 +15,9 @@ import { ciToRgb, rgbToCss } from "./lib/color.js";
 const AMBER = "#e8b45a";
 const ICE = "#8fd3ff";
 const PICK_MAG_LIMIT = 3.0; // unnamed stars brighter than this are still pickable
+const SUN_IDX = -1; // sentinel: an explicit Sun pick inside `selected`, alongside a real star
+const sunStar = () => ({ i: SUN_IDX, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ly: 0, rv: 0, name: "Sun" });
+const getStarOrSun = (cat, idx) => (idx === SUN_IDX ? sunStar() : getStar(cat, idx));
 
 export default function App() {
   const mountRef = useRef(null);
@@ -39,15 +42,30 @@ export default function App() {
   const [skyMode, setSkyMode] = useState("all");   // all | eye | gate
   const [gateLy, setGateLy] = useState(100);
   const [navOpen, setNavOpen] = useState(true);
-  const [secs, setSecs] = useState({ atlas: true, origin: true, dest: true, brief: true });
+  const [secs, setSecs] = useState({ atlas: true, box: true, origin: true, dest: true, brief: true });
   const [viewOpen, setViewOpen] = useState(true);
   const [tripOpen, setTripOpen] = useState(true);
+
+  const [boxSelectOn, setBoxSelectOn] = useState(false);
+  const [boxResults, setBoxResults] = useState(null); // [{idx,name,mag,ly,camDist}] or null
+  const [boxSort, setBoxSort] = useState("near");      // near | bright
 
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
   useEffect(() => { stateRef.current.showLines = showLines; }, [showLines]);
   useEffect(() => { stateRef.current.skyMode = skyMode; }, [skyMode]);
   useEffect(() => { stateRef.current.gateLy = gateLy; }, [gateLy]);
+  useEffect(() => { stateRef.current.boxSelect = boxSelectOn; }, [boxSelectOn]);
+
+  // shared by 3D click-picking and the box-select results list: fills the
+  // next empty slot, or replaces the older slot once both are full
+  const selectStar = useCallback((idx) => {
+    setSelected((prev) => {
+      if (prev.includes(idx)) return prev.filter((p) => p !== idx);
+      if (prev.length >= 2) return [prev[1], idx];
+      return [...prev, idx];
+    });
+  }, []);
 
   useEffect(() => {
     loadCatalog().then(setCat).catch((e) => setLoadError(String(e)));
@@ -93,11 +111,16 @@ export default function App() {
     s.shipYaw = 0; s.shipPitch = 0; s.shipFov = 60;
     s.targetIdx = null;
     s.originIdx = null; // null = Sun; otherwise a tier1 star index the ship departs from
-    const starPos = (idx) => new THREE.Vector3(cat.data[idx * STRIDE], cat.data[idx * STRIDE + 1], cat.data[idx * STRIDE + 2]);
+    // SUN_IDX and null both mean "the Sun" — null is the "nothing explicit" default,
+    // SUN_IDX is an explicit pick (e.g. from search, or swap moving Sun into a slot).
+    const starPos = (idx) => (idx == null || idx === SUN_IDX)
+      ? new THREE.Vector3(0, 0, 0)
+      : new THREE.Vector3(cat.data[idx * STRIDE], cat.data[idx * STRIDE + 1], cat.data[idx * STRIDE + 2]);
+    const nameFor = (idx) => (idx == null || idx === SUN_IDX) ? "Sun" : (cat.nameByIndex.get(idx)?.name ?? `Star #${idx}`);
     s.enterShip = (idx, originIdx = null) => {
       s.targetIdx = idx;
       s.originIdx = originIdx;
-      const originPos = originIdx != null ? starPos(originIdx) : new THREE.Vector3(0, 0, 0);
+      const originPos = starPos(originIdx);
       s.shipPos.copy(originPos);
       const rel = starPos(idx).sub(originPos);
       const len = rel.length();
@@ -122,8 +145,7 @@ export default function App() {
       const from = s.shipPos.clone(); // wherever the ship is currently parked — Sun or origin star
       const to = starPos(s.targetIdx);
       s.trip = { from, to, D: to.distanceTo(from), frac: 0, playing: true, durSec: 40 };
-      const originName = s.originIdx != null ? (cat.nameByIndex.get(s.originIdx)?.name ?? `Star #${s.originIdx}`) : "Sun";
-      setTrip({ D: s.trip.D, name: cat.nameByIndex.get(s.targetIdx)?.name ?? `Star #${s.targetIdx}`, originName });
+      setTrip({ D: s.trip.D, name: nameFor(s.targetIdx), originName: nameFor(s.originIdx) });
       setTripPlaying(true);
     };
     // Swap origin/destination — works before a trip starts (re-parks the ship
@@ -142,9 +164,7 @@ export default function App() {
         const len = rel.length();
         s.shipYaw = Math.atan2(rel.z, rel.x);
         s.shipPitch = Math.asin(rel.y / len);
-        const originName = newOriginIdx != null ? (cat.nameByIndex.get(newOriginIdx)?.name ?? `Star #${newOriginIdx}`) : "Sun";
-        const destName = cat.nameByIndex.get(newDestIdx)?.name ?? `Star #${newDestIdx}`;
-        setTrip((t) => (t ? { ...t, name: destName, originName } : t));
+        setTrip((t) => (t ? { ...t, name: nameFor(newDestIdx), originName: nameFor(newOriginIdx) } : t));
       } else {
         s.enterShip(newDestIdx, newOriginIdx);
       }
@@ -440,11 +460,40 @@ export default function App() {
     labelHost.appendChild(offArrow);
     const ringLabels = ringRadii.map((r) => mkTag(r.toLocaleString() + " ly", "#5a6a8f"));
 
+    // Box-select overlay (god view): drag draws this rectangle instead of
+    // orbiting while boxSelect mode is on; on release every tier1 star
+    // projecting inside it is listed, nearest/brightest first.
+    const boxRectEl = document.createElement("div");
+    boxRectEl.style.cssText = `position:absolute;border:1.5px dashed ${AMBER};
+      background:rgba(232,180,90,0.08);pointer-events:none;display:none;`;
+    labelHost.appendChild(boxRectEl);
+    const boxVec = new THREE.Vector3();
+    function computeBoxSelect(x1, y1, x2, y2) {
+      const rect = el.getBoundingClientRect();
+      const left = Math.min(x1, x2) - rect.left, right = Math.max(x1, x2) - rect.left;
+      const top = Math.min(y1, y2) - rect.top, bottom = Math.max(y1, y2) - rect.top;
+      if (right - left < 4 || bottom - top < 4) return; // ignore accidental micro-drags
+      const matches = [];
+      for (let i = 0; i < n; i++) {
+        const o = i * STRIDE;
+        boxVec.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]).project(camera);
+        if (boxVec.z > 1) continue;
+        const sx = (boxVec.x * 0.5 + 0.5) * rect.width, sy = (-boxVec.y * 0.5 + 0.5) * rect.height;
+        if (sx < left || sx > right || sy < top || sy > bottom) continue;
+        const camDist = camera.position.distanceTo(boxVec.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]));
+        matches.push({
+          idx: i, mag: cat.data[o + 6], ly: Math.hypot(cat.data[o], cat.data[o + 1], cat.data[o + 2]),
+          camDist, name: cat.nameByIndex.get(i)?.name ?? null,
+        });
+      }
+      setBoxResults(matches);
+    }
+
     // ---------------- Interaction ----------------
     const el = renderer.domElement;
     let drag = null, moved = 0;
     const onDown = (e) => {
-      drag = { x: e.clientX, y: e.clientY, btn: e.button, shift: e.shiftKey };
+      drag = { x: e.clientX, y: e.clientY, startX: e.clientX, startY: e.clientY, btn: e.button, shift: e.shiftKey };
       moved = 0;
     };
     const onMove = (e) => {
@@ -455,12 +504,20 @@ export default function App() {
       }
       const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
       moved += Math.abs(dx) + Math.abs(dy);
+      const boxDrag = s.boxSelect && s.mode !== "ship" && drag.btn === 0 && !drag.shift;
       if (s.mode === "ship") {
         // Grab-the-sky look-around; sensitivity tracks FOV so zoomed-in
         // panning stays controllable.
         const k = 0.0022 * (s.shipFov / 60);
         s.shipYaw -= dx * k;
         s.shipPitch = Math.max(-1.55, Math.min(1.55, s.shipPitch + dy * k));
+      } else if (boxDrag) {
+        const rect = el.getBoundingClientRect();
+        const left = Math.min(drag.startX, e.clientX) - rect.left, top = Math.min(drag.startY, e.clientY) - rect.top;
+        boxRectEl.style.display = "block";
+        boxRectEl.style.left = `${left}px`; boxRectEl.style.top = `${top}px`;
+        boxRectEl.style.width = `${Math.abs(e.clientX - drag.startX)}px`;
+        boxRectEl.style.height = `${Math.abs(e.clientY - drag.startY)}px`;
       } else if (drag.btn === 2 || drag.shift) {
         panBy(dx, dy);
       } else {
@@ -472,14 +529,11 @@ export default function App() {
     const onUp = (e) => {
       if (drag && moved < 6 && drag.btn === 0) {
         const hit = pick(e.clientX, e.clientY);
-        if (hit != null) {
-          setSelected((prev) => {
-            if (prev.includes(hit)) return prev.filter((p) => p !== hit);
-            if (prev.length >= 2) return [prev[1], hit];
-            return [...prev, hit];
-          });
-        }
+        if (hit != null) selectStar(hit);
+      } else if (drag && s.boxSelect && s.mode !== "ship" && drag.btn === 0 && !drag.shift) {
+        computeBoxSelect(drag.startX, drag.startY, e.clientX, e.clientY);
       }
+      boxRectEl.style.display = "none";
       drag = null;
     };
     const onWheel = (e) => {
@@ -650,8 +704,8 @@ export default function App() {
 
       // ship-view target reticle
       if (s.mode === "ship" && s.targetIdx != null) {
-        const o = s.targetIdx * STRIDE;
-        const v = labelPos.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]).project(camera);
+        const tp = starPos(s.targetIdx);
+        const v = labelPos.copy(tp).project(camera);
         const rect2 = el.getBoundingClientRect();
         const onScreen = v.z <= 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
         if (onScreen) {
@@ -659,9 +713,8 @@ export default function App() {
           offArrow.style.display = "none";
           reticle.style.left = `${(v.x * 0.5 + 0.5) * rect2.width}px`;
           reticle.style.top = `${(-v.y * 0.5 + 0.5) * rect2.height}px`;
-          const tName = cat.nameByIndex.get(s.targetIdx)?.name ?? `Star #${s.targetIdx}`;
-          retTag.textContent = tName.toUpperCase();
-          projTag(retTag, labelPos.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]));
+          retTag.textContent = nameFor(s.targetIdx).toUpperCase();
+          projTag(retTag, labelPos.copy(tp));
           retTag.style.transform = "translate(-50%, 130%)";
         } else {
           reticle.style.display = "none";
@@ -712,9 +765,9 @@ export default function App() {
       [s.haloA, s.haloB].forEach((halo, i) => {
         const idx = sel[i];
         if (idx == null || s.mode === "ship") { halo.visible = false; return; }
-        const o = idx * STRIDE;
         halo.visible = true;
-        halo.position.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]);
+        if (idx === SUN_IDX) halo.position.set(0, 0, 0);
+        else { const o = idx * STRIDE; halo.position.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]); }
         halo.scale.setScalar(s.radius * 0.045);
       });
 
@@ -749,7 +802,7 @@ export default function App() {
     if (!s.tether || !cat) return;
     const pts = s.tether.geometry.attributes.position;
     if (selected.length === 2) {
-      const a = getStar(cat, selected[0]), b = getStar(cat, selected[1]);
+      const a = getStarOrSun(cat, selected[0]), b = getStarOrSun(cat, selected[1]);
       pts.setXYZ(0, a.x, a.y, a.z); pts.setXYZ(1, b.x, b.y, b.z);
       pts.needsUpdate = true; s.tether.visible = true;
     } else if (selected.length === 1) {
@@ -760,8 +813,8 @@ export default function App() {
   }, [selected, cat]);
 
   // ---------------- Derived measurements ----------------
-  const A = cat && selected[0] != null ? getStar(cat, selected[0]) : null;
-  const B = cat && selected[1] != null ? getStar(cat, selected[1]) : null;
+  const A = cat && selected[0] != null ? getStarOrSun(cat, selected[0]) : null;
+  const B = cat && selected[1] != null ? getStarOrSun(cat, selected[1]) : null;
   let sepLy = null, closure = null, journeyFrom = null, journeyTo = null;
   if (A && B) {
     sepLy = separationLy(A, B);
@@ -784,6 +837,11 @@ export default function App() {
   // which zoom-preset bucket the live camera distance currently falls in —
   // geometric midpoints between the three preset radii (60 / 1600 / 95000 ly)
   const zoomPreset = camDist < 309.8 ? 60 : camDist < 12328.8 ? 1600 : 95000;
+
+  const BOX_RESULTS_SHOWN = 40;
+  const sortedBoxResults = boxResults
+    ? [...boxResults].sort((a, b) => (boxSort === "near" ? a.camDist - b.camDist : a.mag - b.mag))
+    : null;
 
   const panel = {
     background: "rgba(6,10,20,0.82)",
@@ -820,6 +878,55 @@ export default function App() {
       </div>
     </div>
   );
+
+  const CardFor = (st) => (st.i === SUN_IDX ? <SunCard /> : <StarCard st={st} />);
+
+  // Name search over the Sun + all 426 named stars — used to set either slot
+  // of `selected` directly, including picking the Sun explicitly even when a
+  // real star already occupies the other slot (the 3D click model can't do
+  // that, since Sun isn't a catalog point).
+  const StarSearch = ({ placeholder, excludeIdx, allowSun = false, onPick }) => {
+    const [q, setQ] = useState("");
+    const [open, setOpen] = useState(false);
+    const results = useMemo(() => {
+      if (!cat || q.trim().length === 0) return [];
+      const ql = q.trim().toLowerCase();
+      const out = [];
+      if (allowSun && "sun".startsWith(ql)) out.push({ idx: SUN_IDX, name: "Sun" });
+      for (const [k, v] of cat.nameByIndex.entries()) {
+        const idx = Number(k);
+        if (idx === excludeIdx) continue;
+        if (v.name.toLowerCase().startsWith(ql)) out.push({ idx, name: v.name });
+        if (out.length >= 8) break;
+      }
+      return out;
+    }, [q, excludeIdx, allowSun]);
+    return (
+      <div style={{ position: "relative", marginTop: 6 }}>
+        <input value={q} placeholder={placeholder}
+          onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          style={{ ...mono, fontSize: 11, width: "100%", boxSizing: "border-box", padding: "5px 8px",
+            background: "rgba(255,255,255,0.04)", border: "1px solid rgba(232,180,90,0.3)",
+            borderRadius: 4, color: "#dfe6f2", outline: "none" }} />
+        {open && results.length > 0 && (
+          <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 2, zIndex: 5,
+            ...panel, padding: "4px 0", maxHeight: 180, overflowY: "auto" }}>
+            {results.map((r) => (
+              <div key={r.idx}
+                onMouseDown={() => { onPick(r.idx); setQ(""); setOpen(false); }}
+                style={{ ...mono, fontSize: 11, padding: "5px 10px", cursor: "pointer", color: r.idx === SUN_IDX ? "#fff3e0" : "#dfe6f2" }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(232,180,90,0.15)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                {r.name}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   const Section = ({ k, title, children }) => (
     <div style={{ borderTop: "1px solid rgba(232,180,90,0.16)" }}>
@@ -880,9 +987,53 @@ export default function App() {
         )}
         </Section>
 
+        {sortedBoxResults && (
+          <Section k="box" title="BOX SELECT">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <div style={{ ...mono, fontSize: 10.5, color: "#8fa0c0" }}>
+                {sortedBoxResults.length} star{sortedBoxResults.length === 1 ? "" : "s"} in box
+              </div>
+              <button onClick={() => setBoxResults(null)}
+                style={{ ...mono, fontSize: 9.5, padding: "2px 7px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
+                clear
+              </button>
+            </div>
+            <div style={{ display: "flex", gap: 5, marginBottom: 6 }}>
+              {[["near", "NEAREST"], ["bright", "BRIGHTEST"]].map(([k, label]) => (
+                <button key={k} onClick={() => setBoxSort(k)}
+                  style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+                    background: boxSort === k ? "rgba(232,180,90,0.25)" : "rgba(232,180,90,0.05)",
+                    border: `1px solid rgba(232,180,90,${boxSort === k ? 0.65 : 0.25})`, color: "#e8c88a" }}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div style={{ maxHeight: 220, overflowY: "auto" }}>
+              {sortedBoxResults.slice(0, BOX_RESULTS_SHOWN).map((r) => (
+                <div key={r.idx} onClick={() => selectStar(r.idx)}
+                  style={{ ...mono, fontSize: 10.5, padding: "4px 2px", cursor: "pointer", display: "flex", justifyContent: "space-between", gap: 6,
+                    borderTop: "1px solid rgba(255,255,255,0.06)", color: selected.includes(r.idx) ? AMBER : "#c3cfe6" }}>
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{r.name ?? `Star #${r.idx}`}</span>
+                  <span style={{ color: "#66779a", flexShrink: 0 }}>mag {fmt(r.mag, 1)} · {fmt(r.camDist, r.camDist < 100 ? 1 : 0)} ly</span>
+                </div>
+              ))}
+            </div>
+            {sortedBoxResults.length > BOX_RESULTS_SHOWN && (
+              <div style={{ ...mono, fontSize: 9.5, color: "#5a6a8f", marginTop: 4 }}>
+                showing nearest {BOX_RESULTS_SHOWN} of {sortedBoxResults.length}
+              </div>
+            )}
+            <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 6 }}>
+              distance is from the camera, not the Sun · click a row to select it
+            </div>
+          </Section>
+        )}
+
         {A && (
           <Section k="origin" title="ORIGIN">
-            {B ? <StarCard st={A} /> : <SunCard />}
+            {B ? CardFor(A) : <SunCard />}
+            <StarSearch placeholder="search stars… (or “Sun”)" allowSun excludeIdx={B ? selected[1] : selected[0]}
+              onPick={(idx) => setSelected((prev) => (prev.length === 2 ? [idx, prev[1]] : [idx, prev[0]]))} />
           </Section>
         )}
         {A && B && (
@@ -902,7 +1053,9 @@ export default function App() {
         )}
         {A && (
           <Section k="dest" title="DESTINATION">
-            <StarCard st={B ?? A} />
+            {CardFor(B ?? A)}
+            <StarSearch placeholder="search stars…" excludeIdx={B ? selected[0] : null}
+              onPick={(idx) => setSelected((prev) => (prev.length === 2 ? [prev[0], idx] : [idx]))} />
           </Section>
         )}
 
@@ -970,7 +1123,20 @@ export default function App() {
                     {label}
                   </button>
                 ))}
+                {!shipView && (
+                  <button onClick={() => setBoxSelectOn((v) => !v)} title="drag a box to list stars in it, nearest or brightest first"
+                    style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                      background: boxSelectOn ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
+                      border: `1px solid rgba(143,165,216,${boxSelectOn ? 0.6 : 0.25})`, color: "#aebde0" }}>
+                    ⬚ box select
+                  </button>
+                )}
               </div>
+              {boxSelectOn && !shipView && (
+                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
+                  drag a box over the sky to list every star in it, even faint ones
+                </div>
+              )}
               {skyMode === "gate" && (
                 <>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 7 }}>

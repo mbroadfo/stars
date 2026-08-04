@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import * as THREE from "three";
 import { loadCatalog, loadFarField, getStar, STRIDE, CI_SENTINEL } from "./lib/catalog.js";
-import { journey, brachAt, closureRate, separationLy, fmt, fmtYears, KM_PER_LY } from "./lib/physics.js";
+import { journey, brachAt, closureRate, separationLy, advanceStar, closestApproach, fmt, fmtYears, KM_PER_LY, C_KMS } from "./lib/physics.js";
 import { ciToRgb, rgbToCss } from "./lib/color.js";
 
 /* ============================================================
@@ -18,6 +18,9 @@ const PICK_MAG_LIMIT = 3.0; // unnamed stars brighter than this are still pickab
 const SUN_IDX = -1; // sentinel: an explicit Sun pick inside `selected`, alongside a real star
 const sunStar = () => ({ i: SUN_IDX, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ly: 0, rv: 0, name: "Sun" });
 const getStarOrSun = (cat, idx) => (idx === SUN_IDX ? sunStar() : getStar(cat, idx));
+const KMS_TO_LYYR = 1 / C_KMS; // km/s -> ly/yr, for time-scrub position displacement
+const YEARS_PER_SEC = 2500;    // playback rate: a full ±100k sweep takes 80s
+const YEARS_MAX = 100000;
 
 export default function App() {
   const mountRef = useRef(null);
@@ -50,12 +53,19 @@ export default function App() {
   const [boxResults, setBoxResults] = useState(null); // [{idx,name,mag,ly,camDist}] or null
   const [boxSort, setBoxSort] = useState("near");      // near | bright
 
+  // Time scrub — atlas view only (ship view always shows the present; see
+  // PLAN.md S4). years: signed offset from now, driven by real 6D velocities.
+  const [years, setYears] = useState(0);
+  const [yearsPlaying, setYearsPlaying] = useState(false);
+  const [timeOpen, setTimeOpen] = useState(true);
+
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
   useEffect(() => { stateRef.current.showLines = showLines; }, [showLines]);
   useEffect(() => { stateRef.current.skyMode = skyMode; }, [skyMode]);
   useEffect(() => { stateRef.current.gateLy = gateLy; }, [gateLy]);
   useEffect(() => { stateRef.current.boxSelect = boxSelectOn; }, [boxSelectOn]);
+  useEffect(() => { stateRef.current.years = years; }, [years]);
 
   // shared by 3D click-picking and the box-select results list: fills the
   // next empty slot, or replaces the older slot once both are full
@@ -179,6 +189,21 @@ export default function App() {
       s.trip.playing = p; setTripPlaying(p);
     };
 
+    // Time scrub (atlas view only): stars advance on their real 6D velocity
+    // (straight-line extrapolation — see advanceStar/closestApproach in
+    // physics.js). years=0 is "now"; the shader, picking, labels, tether,
+    // and halos all read s.years each frame/interaction — see animate().
+    s.setYears = (y) => {
+      s.years = Math.max(-YEARS_MAX, Math.min(YEARS_MAX, y));
+      s.yearsPlaying = false; setYearsPlaying(false);
+      setYears(s.years);
+    };
+    s.setYearsPlaying = (p) => {
+      if (p && s.years >= YEARS_MAX) s.years = -YEARS_MAX; // replay the full sweep
+      s.yearsPlaying = p; setYearsPlaying(p);
+      if (p) setYears(s.years);
+    };
+
     // --- Star field: one draw call over the whole Tier 1 buffer ---
     const n = cat.count;
     const inter = new THREE.InterleavedBuffer(cat.data, STRIDE);
@@ -189,6 +214,7 @@ export default function App() {
     }
     const starGeo = new THREE.BufferGeometry();
     starGeo.setAttribute("position", new THREE.InterleavedBufferAttribute(inter, 3, 0));
+    starGeo.setAttribute("vel", new THREE.InterleavedBufferAttribute(inter, 3, 3));
     starGeo.setAttribute("mag", new THREE.InterleavedBufferAttribute(inter, 1, 6));
     starGeo.setAttribute("color", new THREE.BufferAttribute(colArr, 3));
     // Shared star fragment: soft disc + halo, alpha fades with apparent mag,
@@ -214,6 +240,8 @@ export default function App() {
       vFade = fade;`;
     // 5/ln(10) — GLSL log() is natural log.
     const LOG10x5 = "2.171472409516";
+    // km/s -> ly/yr for the time-scrub position displacement (1 ly/yr = c).
+    const KMS_TO_LYYR_GLSL = String(KMS_TO_LYYR);
     const shipUniforms = () => ({
       uShip: { value: 0 },
       uShipPos: { value: new THREE.Vector3() },
@@ -225,19 +253,23 @@ export default function App() {
     // m' = m + 5·log10(d_ship / d_sun) — both distances live on the GPU.
     const starMat = new THREE.ShaderMaterial({
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
-      uniforms: shipUniforms(),
+      uniforms: { ...shipUniforms(), uYears: { value: 0 } },
       vertexShader: `
         uniform float uShip; uniform vec3 uShipPos;
-        uniform float uMagLimit; uniform float uGate;
-        attribute float mag; varying vec3 vColor; varying float vMag; varying float vFade;
+        uniform float uMagLimit; uniform float uGate; uniform float uYears;
+        attribute float mag; attribute vec3 vel; varying vec3 vColor; varying float vMag; varying float vFade;
         void main(){ vColor=color;
-          float dSun = max(length(position), 0.001);
+          // Time scrub: straight-line extrapolation on the real 6D velocity
+          // (forced to 0 in ship view — see animate()). Every other position
+          // use below (dSun, dShip, gl_Position) reads this displaced pos.
+          vec3 pos = position + vel * (uYears * ${KMS_TO_LYYR_GLSL});
+          float dSun = max(length(pos), 0.001);
           float m = mag;
           float mGate = m;
           float dGate = dSun;
           float fade = 1.0;
           if (uShip > 0.5) {
-            float rawD = distance(position, uShipPos);
+            float rawD = distance(pos, uShipPos);
             float dShip = max(rawD, 0.05);
             m = mag + ${LOG10x5} * log(dShip / dSun);
             mGate = m;
@@ -246,12 +278,13 @@ export default function App() {
           }
           ${SKY_FILTER}
           vMag = m;
-          vec4 mv=modelViewMatrix*vec4(position,1.0);
+          vec4 mv=modelViewMatrix*vec4(pos,1.0);
           gl_PointSize=clamp(15.5-2.2*m, 1.6, 19.0);
           gl_Position=projectionMatrix*mv; }`,
       fragmentShader: STAR_FRAG,
       vertexColors: true,
     });
+    s.starMat = starMat;
     // Absmag-based variant (far field + Sun marker): m' = M + 5·log10(d_pc/10),
     // with d in ly (10 pc = 32.6156 ly). uAtlasSize > 0 pins atlas-mode size.
     const mkAbsmagMat = (atlasSize) => new THREE.ShaderMaterial({
@@ -352,19 +385,39 @@ export default function App() {
     // star, so the figures deform under pure perspective as the camera moves.
     if (cat.asterisms) {
       const segs = [];
+      const segVel = [];
       for (const c of Object.values(cat.asterisms.constellations)) {
         for (const [i, j] of c.lines) {
           segs.push(
             cat.data[i * STRIDE], cat.data[i * STRIDE + 1], cat.data[i * STRIDE + 2],
             cat.data[j * STRIDE], cat.data[j * STRIDE + 1], cat.data[j * STRIDE + 2],
           );
+          segVel.push(
+            cat.data[i * STRIDE + 3], cat.data[i * STRIDE + 4], cat.data[i * STRIDE + 5],
+            cat.data[j * STRIDE + 3], cat.data[j * STRIDE + 4], cat.data[j * STRIDE + 5],
+          );
         }
       }
       const astGeo = new THREE.BufferGeometry();
       astGeo.setAttribute("position", new THREE.Float32BufferAttribute(segs, 3));
-      const astMat = new THREE.LineBasicMaterial({
-        color: 0x8fa5d8, transparent: true, opacity: 0.55,
-        depthWrite: false, blending: THREE.AdditiveBlending,
+      astGeo.setAttribute("vel", new THREE.Float32BufferAttribute(segVel, 3));
+      // ShaderMaterial (not LineBasicMaterial) so endpoints can advance on
+      // the same real velocities as the stars they connect — figures
+      // dissolve under time scrub exactly like the points they join.
+      const astMat = new THREE.ShaderMaterial({
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+        uniforms: {
+          uYears: { value: 0 },
+          uColor: { value: new THREE.Color(0x8fa5d8) },
+          uOpacity: { value: 0.55 },
+        },
+        vertexShader: `
+          uniform float uYears; attribute vec3 vel;
+          void main(){ vec3 pos = position + vel * (uYears * ${KMS_TO_LYYR_GLSL});
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0); }`,
+        fragmentShader: `
+          uniform vec3 uColor; uniform float uOpacity;
+          void main(){ gl_FragColor = vec4(uColor, uOpacity); }`,
       });
       const astLines = new THREE.LineSegments(astGeo, astMat);
       astLines.frustumCulled = false;
@@ -474,15 +527,19 @@ export default function App() {
       const top = Math.min(y1, y2) - rect.top, bottom = Math.max(y1, y2) - rect.top;
       if (right - left < 4 || bottom - top < 4) return; // ignore accidental micro-drags
       const matches = [];
+      const yrs = (s.years ?? 0) * KMS_TO_LYYR; // box select is atlas-only, gated at the call site
       for (let i = 0; i < n; i++) {
         const o = i * STRIDE;
-        boxVec.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]).project(camera);
+        const dx = cat.data[o] + cat.data[o + 3] * yrs;
+        const dy = cat.data[o + 1] + cat.data[o + 4] * yrs;
+        const dz = cat.data[o + 2] + cat.data[o + 5] * yrs;
+        boxVec.set(dx, dy, dz).project(camera);
         if (boxVec.z > 1) continue;
         const sx = (boxVec.x * 0.5 + 0.5) * rect.width, sy = (-boxVec.y * 0.5 + 0.5) * rect.height;
         if (sx < left || sx > right || sy < top || sy > bottom) continue;
-        const camDist = camera.position.distanceTo(boxVec.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]));
+        const camDist = camera.position.distanceTo(boxVec.set(dx, dy, dz));
         matches.push({
-          idx: i, mag: cat.data[o + 6], ly: Math.hypot(cat.data[o], cat.data[o + 1], cat.data[o + 2]),
+          idx: i, mag: cat.data[o + 6], ly: Math.hypot(dx, dy, dz),
           camDist, name: cat.nameByIndex.get(i)?.name ?? null,
         });
       }
@@ -567,9 +624,16 @@ export default function App() {
       const rect = el.getBoundingClientRect();
       const px = cx - rect.left, py = cy - rect.top;
       let best = null, bestD = 16;
+      // Time-scrub displacement (0 in ship view — stars don't move there,
+      // only the ship does) so clicking stays station-accurate at any epoch.
+      const yrs = (s.mode === "ship" ? 0 : (s.years ?? 0)) * KMS_TO_LYYR;
       for (const i of pickable) {
         const o = i * STRIDE;
-        pickVec.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]).project(camera);
+        pickVec.set(
+          cat.data[o] + cat.data[o + 3] * yrs,
+          cat.data[o + 1] + cat.data[o + 4] * yrs,
+          cat.data[o + 2] + cat.data[o + 5] * yrs,
+        ).project(camera);
         if (pickVec.z > 1) continue;
         const sx = (pickVec.x * 0.5 + 0.5) * rect.width, sy = (-pickVec.y * 0.5 + 0.5) * rect.height;
         const d = Math.hypot(sx - px, sy - py);
@@ -670,6 +734,17 @@ export default function App() {
         m.uniforms.uMagLimit.value = magLimit;
         m.uniforms.uGate.value = gate;
       }
+      // Time scrub is atlas-view only — ship view always shows the present.
+      if (s.mode !== "ship" && s.yearsPlaying) {
+        s.years = Math.max(-YEARS_MAX, Math.min(YEARS_MAX, s.years + dt * YEARS_PER_SEC));
+        if (Math.abs(s.years) >= YEARS_MAX) { s.yearsPlaying = false; setYearsPlaying(false); }
+        s.yearsUiT = (s.yearsUiT ?? 0) + dt;
+        if (s.yearsUiT > 0.15) { s.yearsUiT = 0; setYears(s.years); }
+      }
+      const yrsRaw = s.mode === "ship" ? 0 : (s.years ?? 0); // plain years — shaders convert internally
+      const yrs = yrsRaw * KMS_TO_LYYR; // pre-converted for JS-side position math (labels, halos)
+      if (s.starMat) s.starMat.uniforms.uYears.value = yrsRaw;
+      if (s.astMat) s.astMat.uniforms.uYears.value = yrsRaw;
       if (s.astLines) s.astLines.visible = s.showLines !== false;
       if (s.mode === "ship") {
         camera.position.copy(s.shipPos);
@@ -700,7 +775,7 @@ export default function App() {
       // labels — in ship view use a fixed "neighborhood" density so bright
       // and nearby star labels show; ring/galaxy tags hide themselves.
       const dense = s.mode === "ship" ? 200 : s.radius;
-      if (s.astMat) s.astMat.opacity = s.mode === "ship" ? 0.8 : 0.5;
+      if (s.astMat) s.astMat.uniforms.uOpacity.value = s.mode === "ship" ? 0.8 : 0.5;
 
       // ship-view target reticle
       if (s.mode === "ship" && s.targetIdx != null) {
@@ -741,7 +816,7 @@ export default function App() {
           star.tier === "nearby" ? dense < 400 :
           dense < 150 && star.ly < dense * 6;
         if (!show) { le.style.display = "none"; return; }
-        projTag(le, labelPos.set(star.x, star.y, star.z));
+        projTag(le, labelPos.set(star.x + star.vx * yrs, star.y + star.vy * yrs, star.z + star.vz * yrs));
         le.style.opacity = star.tier !== "bright" && dense > 150 ? 0.55 : 0.9;
       });
       if (s.mode === "ship" && s.shipPos.lengthSq() < 0.01) {
@@ -767,7 +842,10 @@ export default function App() {
         if (idx == null || s.mode === "ship") { halo.visible = false; return; }
         halo.visible = true;
         if (idx === SUN_IDX) halo.position.set(0, 0, 0);
-        else { const o = idx * STRIDE; halo.position.set(cat.data[o], cat.data[o + 1], cat.data[o + 2]); }
+        else {
+          const o = idx * STRIDE;
+          halo.position.set(cat.data[o] + cat.data[o + 3] * yrs, cat.data[o + 1] + cat.data[o + 4] * yrs, cat.data[o + 2] + cat.data[o + 5] * yrs);
+        }
         halo.scale.setScalar(s.radius * 0.045);
       });
 
@@ -795,26 +873,40 @@ export default function App() {
     };
   }, [cat, flyTo]);
 
-  // keep tether + halos synced with selection
+  // keep tether + halos synced with selection (and, in atlas view, the
+  // current time-scrub epoch — the tether should track where a star
+  // actually is "now", not where it sat at the catalog's reference epoch)
   useEffect(() => {
     const s = stateRef.current;
     s.selectedIdx = selected;
     if (!s.tether || !cat) return;
     const pts = s.tether.geometry.attributes.position;
+    const yrs = s.mode === "ship" ? 0 : years;
     if (selected.length === 2) {
-      const a = getStarOrSun(cat, selected[0]), b = getStarOrSun(cat, selected[1]);
+      const a = advanceStar(getStarOrSun(cat, selected[0]), yrs);
+      const b = advanceStar(getStarOrSun(cat, selected[1]), yrs);
       pts.setXYZ(0, a.x, a.y, a.z); pts.setXYZ(1, b.x, b.y, b.z);
       pts.needsUpdate = true; s.tether.visible = true;
     } else if (selected.length === 1) {
-      const a = getStar(cat, selected[0]);
+      const a = advanceStar(getStarOrSun(cat, selected[0]), yrs);
       pts.setXYZ(0, 0, 0, 0); pts.setXYZ(1, a.x, a.y, a.z);
       pts.needsUpdate = true; s.tether.visible = true;
     } else s.tether.visible = false;
-  }, [selected, cat]);
+  }, [selected, cat, years]);
 
   // ---------------- Derived measurements ----------------
-  const A = cat && selected[0] != null ? getStarOrSun(cat, selected[0]) : null;
-  const B = cat && selected[1] != null ? getStarOrSun(cat, selected[1]) : null;
+  // Time scrub only applies in atlas view — ship view always shows the
+  // present (see PLAN.md S4). Cards/brief use the star's position at the
+  // current epoch; closest-approach is a fixed fact about the trajectory
+  // (computed from the catalog's reference epoch, t=0), independent of
+  // wherever the scrub slider currently sits.
+  const effectiveYears = shipView ? 0 : years;
+  const rawA = cat && selected[0] != null ? getStarOrSun(cat, selected[0]) : null;
+  const rawB = cat && selected[1] != null ? getStarOrSun(cat, selected[1]) : null;
+  const A = rawA ? advanceStar(rawA, effectiveYears) : null;
+  const B = rawB ? advanceStar(rawB, effectiveYears) : null;
+  const approachA = rawA && rawA.i !== SUN_IDX ? closestApproach(rawA) : null;
+  const approachB = rawB && rawB.i !== SUN_IDX ? closestApproach(rawB) : null;
   let sepLy = null, closure = null, journeyFrom = null, journeyTo = null;
   if (A && B) {
     sepLy = separationLy(A, B);
@@ -827,7 +919,7 @@ export default function App() {
   const brief = sepLy ? journey(sepLy, accel) : null;
   const voyYears = sepLy ? (sepLy * KM_PER_LY) / 17 / 3.15576e7 : null;
 
-  const hoveredStar = cat && hovered != null ? getStar(cat, hovered) : null;
+  const hoveredStar = cat && hovered != null ? advanceStar(getStar(cat, hovered), effectiveYears) : null;
 
   const scaleLabel =
     camDist < 100 ? "the solar neighborhood" :
@@ -852,7 +944,7 @@ export default function App() {
   const mono = { fontFamily: "ui-monospace, Menlo, Consolas, monospace" };
   const serif = { fontFamily: "Georgia, 'Times New Roman', serif" };
 
-  const StarCard = ({ st }) => (
+  const StarCard = ({ st, approach }) => (
     <div>
       <div style={{ ...serif, fontSize: 17, color: "#f0e8d8" }}>{st.name ?? `Star #${st.i}`}</div>
       <div style={{ ...mono, fontSize: 11.5, color: "#9fb0cf", marginTop: 4, lineHeight: 1.7 }}>
@@ -865,6 +957,16 @@ export default function App() {
           {st.rv < 0 ? "approaching" : "receding"} at {fmt(Math.abs(st.rv), 1)} km/s
         </div>
       </div>
+      {approach && (
+        <div style={{ ...mono, fontSize: 10.5, color: "#8fa0c0", marginTop: 6, paddingTop: 6, borderTop: "1px solid rgba(255,255,255,0.08)" }}>
+          closest approach <span style={{ color: AMBER }}>{fmt(approach.distanceLy, approach.distanceLy < 10 ? 2 : 1)} ly</span>
+          {" "}in <span style={{ color: AMBER }}>{fmt(Math.abs(approach.years), 0)} yr</span>{approach.years < 0 ? " (past)" : ""}
+          <button onClick={() => stateRef.current.setYears?.(approach.years)} title="scrub to this epoch"
+            style={{ ...mono, fontSize: 9, marginLeft: 6, padding: "1px 6px", background: "none", border: "1px solid rgba(232,180,90,0.4)", color: AMBER, borderRadius: 3, cursor: "pointer" }}>
+            jump
+          </button>
+        </div>
+      )}
     </div>
   );
 
@@ -879,7 +981,7 @@ export default function App() {
     </div>
   );
 
-  const CardFor = (st) => (st.i === SUN_IDX ? <SunCard /> : <StarCard st={st} />);
+  const CardFor = (st, approach) => (st.i === SUN_IDX ? <SunCard /> : <StarCard st={st} approach={approach} />);
 
   // Name search over the Sun + all 426 named stars — used to set either slot
   // of `selected` directly, including picking the Sun explicitly even when a
@@ -1031,7 +1133,7 @@ export default function App() {
 
         {A && (
           <Section k="origin" title="ORIGIN">
-            {B ? CardFor(A) : <SunCard />}
+            {B ? CardFor(A, approachA) : <SunCard />}
             <StarSearch placeholder="search stars… (or “Sun”)" allowSun excludeIdx={B ? selected[1] : selected[0]}
               onPick={(idx) => setSelected((prev) => (prev.length === 2 ? [idx, prev[1]] : [idx, prev[0]]))} />
           </Section>
@@ -1053,7 +1155,7 @@ export default function App() {
         )}
         {A && (
           <Section k="dest" title="DESTINATION">
-            {CardFor(B ?? A)}
+            {CardFor(B ?? A, B ? approachB : approachA)}
             <StarSearch placeholder="search stars…" excludeIdx={B ? selected[0] : null}
               onPick={(idx) => setSelected((prev) => (prev.length === 2 ? [prev[0], idx] : [idx]))} />
           </Section>
@@ -1158,6 +1260,43 @@ export default function App() {
             </>
           )}
         </div>
+
+        {!shipView && (
+          <div style={{ ...panel, padding: "9px 10px" }}>
+            <div onClick={() => setTimeOpen((v) => !v)}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: timeOpen ? 7 : 0 }}>
+              <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>TIME</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{timeOpen ? "▾" : "▸"}</span>
+            </div>
+            {timeOpen && (
+              <>
+                <div style={{ ...serif, fontSize: 15, color: "#f0e8d8", textAlign: "center" }}>
+                  {years === 0 ? "NOW" : `T${years > 0 ? "+" : "−"}${fmt(Math.abs(years), 0)} yr`}
+                </div>
+                <input type="range" min={-YEARS_MAX} max={YEARS_MAX} step="100" value={years}
+                  onChange={(e) => stateRef.current.setYears?.(Number(e.target.value))}
+                  style={{ width: "100%", accentColor: AMBER, marginTop: 6 }} />
+                <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
+                  <button onClick={() => stateRef.current.setYearsPlaying?.(!yearsPlaying)}
+                    style={{ ...mono, fontSize: 11, width: 26, padding: "3px 0", background: "rgba(232,180,90,0.18)", border: "1px solid rgba(232,180,90,0.6)", color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
+                    {yearsPlaying ? "⏸" : "▶"}
+                  </button>
+                  {[["now", 0], ["−100k", -YEARS_MAX], ["+100k", YEARS_MAX]].map(([label, y]) => (
+                    <button key={label} onClick={() => stateRef.current.setYears?.(y)}
+                      style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+                        background: years === y ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
+                        border: `1px solid rgba(232,180,90,${years === y ? 0.7 : 0.25})`, color: "#e8c88a" }}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
+                  stars advance on real 6D velocities · atlas view only
+                </div>
+              </>
+            )}
+          </div>
+        )}
 
         {selected.length > 0 && (
           <div style={{ ...panel, padding: "9px 10px" }}>
@@ -1287,7 +1426,7 @@ export default function App() {
 
       {/* Credits */}
       <div style={{ position: "absolute", bottom: 8, right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
-        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative
+        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed
       </div>
     </div>
   );

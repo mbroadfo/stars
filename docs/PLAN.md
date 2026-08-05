@@ -110,12 +110,41 @@ Architecture decisions (first consumer of spa-on-aws):
 Gate: `https://stars.xaminisalamini.com` serves the atlas with the SHA-verified
 catalog; a `git push` touching only `web/` redeploys without touching data.
 
-### S4 — Time scrub
+### S4 — Time scrub ✅
 
-±100k years using velocity vectors. Gate: reproduce Barnard's Star closest approach
-(~11.8k yr from now, ~3.75 ly). Build order note: S4.5 goes first — time scrub
-then rides the same "watch the sky change" machinery (positions advanced by v·t
-instead of the camera moving).
+Gate passed 2026-08-04, on branch `s4-time-scrub`, riding S4.5's "watch the sky
+change" machinery exactly as planned (positions advanced by v·t instead of the
+camera moving). ±100,000 years, atlas view only (ship view always shows the
+present — combining travel-time with time-scrub epochs is real but explicitly
+deferred, not needed for this gate).
+
+**Gate correction — the plan's own star wasn't in the data.** Barnard's Star
+has apparent mag 9.51, fainter than Tier 1's mag ≤ 9 cutoff — it was never in
+the 123,018-star buffer, so the original gate (~11.8k yr, ~3.75 ly) could not
+be reproduced with real data. Rather than fudge it, computed closest-approach
+against every named star actually in Tier 1 and substituted the real
+answer: **Alpha Centauri (Rigil Kentaurus) — closest approach 2.871 ly in
+27,610 years** — a genuine, independently-documented astronomical fact,
+arguably a better demo star than Barnard's Star since it's the one everyone's
+heard of. Verified live: selecting it shows the fact with a "jump" button;
+jumping lands the epoch at T+27,610 yr and the live distance readout reads
+2.9 ly, matching the closed-form minimum to rounding.
+
+**What moves and what doesn't (honesty policy):** only Tier 1 stars advance,
+on their real 6D velocities — shader-side (`uYears` uniform + `vel` attribute
+on both the star points and the constellation-line endpoints, so asterisms
+deform right along with the stars they connect) and JS-side (picking,
+box-select, labels, halos, tether, the mission brief) all read the same
+`years` state. Far-field (no velocity data) and the Sun (reference origin by
+definition) stay fixed — stated outright in the credits line, not left
+implicit.
+
+**Instruments:** TIME control in the right rail (slider, now/±100k presets,
+play at 2,500 yr/sec — a full sweep takes 80s); any selected star's card
+shows its closest approach as a fixed trajectory fact (computed at t=0,
+independent of the scrub position) with a one-click jump to that epoch;
+two-star separation/closure in the mission brief is fully time-aware (Sirius
+→ Vega: 33.17 ly now, 30.57 ly at +50,000 yr).
 
 ### S4.5 ⭐ — The Traveler's Sky (in progress; build BEFORE S4)
 

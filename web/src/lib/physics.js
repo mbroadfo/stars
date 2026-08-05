@@ -50,6 +50,37 @@ export function separationLy(a, b) {
   return Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
 }
 
+const KMS_TO_LYYR = 1 / C_KMS; // 1 ly/yr = c, so km/s -> ly/yr divides by c in km/s
+
+// Where a star's straight-line motion (constant velocity, S1's model) puts it
+// `years` from now. Positions in ly, velocities in km/s — matches getStar().
+// years=0 is a no-op (returns the same object) so callers never need to branch.
+export function advanceStar(star, years) {
+  if (!years) return star;
+  const x = star.x + star.vx * KMS_TO_LYYR * years;
+  const y = star.y + star.vy * KMS_TO_LYYR * years;
+  const z = star.z + star.vz * KMS_TO_LYYR * years;
+  const ly = Math.hypot(x, y, z);
+  // Radial velocity is v . unit(pos) at the CURRENT position — as a star
+  // passes its closest approach this flips sign (approaching -> receding),
+  // which is physically real, not an artifact.
+  const rv = ly > 0 ? (star.vx * x + star.vy * y + star.vz * z) / ly : 0;
+  return { ...star, x, y, z, ly, rv };
+}
+
+// Minimum of |p0 + v*t|^2 over all t (constant-velocity straight-line
+// approximation — the same model advanceStar uses). Returns null for a
+// star with no meaningful velocity (would return years=NaN otherwise).
+export function closestApproach(star) {
+  const vx = star.vx * KMS_TO_LYYR, vy = star.vy * KMS_TO_LYYR, vz = star.vz * KMS_TO_LYYR;
+  const vv = vx * vx + vy * vy + vz * vz;
+  if (vv < 1e-30) return null;
+  const pv = star.x * vx + star.y * vy + star.z * vz;
+  const years = -pv / vv;
+  const distanceLy = Math.sqrt(Math.max(0, star.x * star.x + star.y * star.y + star.z * star.z - (pv * pv) / vv));
+  return { years, distanceLy };
+}
+
 export function fmt(n, digits = 1) {
   if (!isFinite(n)) return "—";
   if (n >= 10000) return Math.round(n).toLocaleString();

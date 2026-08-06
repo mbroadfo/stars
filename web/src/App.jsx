@@ -123,16 +123,26 @@ export default function App() {
     s.originIdx = null; // null = Sun; otherwise a tier1 star index the ship departs from
     // SUN_IDX and null both mean "the Sun" — null is the "nothing explicit" default,
     // SUN_IDX is an explicit pick (e.g. from search, or swap moving Sun into a slot).
-    const starPos = (idx) => (idx == null || idx === SUN_IDX)
-      ? new THREE.Vector3(0, 0, 0)
-      : new THREE.Vector3(cat.data[idx * STRIDE], cat.data[idx * STRIDE + 1], cat.data[idx * STRIDE + 2]);
+    // yrs advances a star's position on its real velocity — the Sun (idx null
+    // or SUN_IDX) never moves regardless, by definition of the frame.
+    const starPos = (idx, yrs = 0) => {
+      if (idx == null || idx === SUN_IDX) return new THREE.Vector3(0, 0, 0);
+      const o = idx * STRIDE;
+      return new THREE.Vector3(
+        cat.data[o] + cat.data[o + 3] * yrs * KMS_TO_LYYR,
+        cat.data[o + 1] + cat.data[o + 4] * yrs * KMS_TO_LYYR,
+        cat.data[o + 2] + cat.data[o + 5] * yrs * KMS_TO_LYYR,
+      );
+    };
     const nameFor = (idx) => (idx == null || idx === SUN_IDX) ? "Sun" : (cat.nameByIndex.get(idx)?.name ?? `Star #${idx}`);
+    s.effYears = 0; // combined epoch — base scrub epoch + Earth-time elapsed on any active trip; see animate()
     s.enterShip = (idx, originIdx = null) => {
       s.targetIdx = idx;
       s.originIdx = originIdx;
-      const originPos = starPos(originIdx);
+      const yrs = s.years ?? 0;
+      const originPos = starPos(originIdx, yrs);
       s.shipPos.copy(originPos);
-      const rel = starPos(idx).sub(originPos);
+      const rel = starPos(idx, yrs).sub(originPos);
       const len = rel.length();
       s.shipYaw = Math.atan2(rel.z, rel.x);
       s.shipPitch = Math.asin(rel.y / len);
@@ -140,7 +150,14 @@ export default function App() {
       s.mode = "ship";
       setShipView(true);
     };
+    // Landing bakes the trip's Earth-time into the base epoch — "the universe
+    // moved on while you were away" isn't just a mission-brief number anymore,
+    // it's where you land: the next departure continues from this epoch.
     s.exitShip = () => {
+      if (s.trip) {
+        s.years = (s.years ?? 0) + brachAt(s.trip.D, s.accel ?? 1, s.trip.frac).earthYears;
+        setYears(s.years);
+      }
       s.mode = "atlas";
       s.trip = null;
       s.originIdx = null;
@@ -153,7 +170,7 @@ export default function App() {
     s.startTrip = () => {
       if (s.mode !== "ship" || s.targetIdx == null) return;
       const from = s.shipPos.clone(); // wherever the ship is currently parked — Sun or origin star
-      const to = starPos(s.targetIdx);
+      const to = starPos(s.targetIdx, s.years ?? 0); // fixed at the departure epoch — no mid-flight re-aiming (that's intercept nav, S5)
       s.trip = { from, to, D: to.distanceTo(from), frac: 0, playing: true, durSec: 40 };
       setTrip({ D: s.trip.D, name: nameFor(s.targetIdx), originName: nameFor(s.originIdx) });
       setTripPlaying(true);
@@ -527,7 +544,7 @@ export default function App() {
       const top = Math.min(y1, y2) - rect.top, bottom = Math.max(y1, y2) - rect.top;
       if (right - left < 4 || bottom - top < 4) return; // ignore accidental micro-drags
       const matches = [];
-      const yrs = (s.years ?? 0) * KMS_TO_LYYR; // box select is atlas-only, gated at the call site
+      const yrs = (s.effYears ?? 0) * KMS_TO_LYYR; // box select is atlas-only, gated at the call site
       for (let i = 0; i < n; i++) {
         const o = i * STRIDE;
         const dx = cat.data[o] + cat.data[o + 3] * yrs;
@@ -624,9 +641,9 @@ export default function App() {
       const rect = el.getBoundingClientRect();
       const px = cx - rect.left, py = cy - rect.top;
       let best = null, bestD = 16;
-      // Time-scrub displacement (0 in ship view — stars don't move there,
-      // only the ship does) so clicking stays station-accurate at any epoch.
-      const yrs = (s.mode === "ship" ? 0 : (s.years ?? 0)) * KMS_TO_LYYR;
+      // Time-scrub displacement (the combined epoch — matches whatever the
+      // shader is currently drawing) so hover/click stay station-accurate.
+      const yrs = (s.effYears ?? 0) * KMS_TO_LYYR;
       for (const i of pickable) {
         const o = i * STRIDE;
         pickVec.set(
@@ -734,17 +751,24 @@ export default function App() {
         m.uniforms.uMagLimit.value = magLimit;
         m.uniforms.uGate.value = gate;
       }
-      // Time scrub is atlas-view only — ship view always shows the present.
-      if (s.mode !== "ship" && s.yearsPlaying) {
+      // Manual play/slider drive the BASE epoch whenever no trip is active —
+      // works in atlas view, and in ship view before departure (previewing
+      // different departure epochs). Once a trip starts, Earth-time elapsed
+      // takes over automatically below.
+      if (!s.trip && s.yearsPlaying) {
         s.years = Math.max(-YEARS_MAX, Math.min(YEARS_MAX, s.years + dt * YEARS_PER_SEC));
         if (Math.abs(s.years) >= YEARS_MAX) { s.yearsPlaying = false; setYearsPlaying(false); }
         s.yearsUiT = (s.yearsUiT ?? 0) + dt;
         if (s.yearsUiT > 0.15) { s.yearsUiT = 0; setYears(s.years); }
       }
-      const yrsRaw = s.mode === "ship" ? 0 : (s.years ?? 0); // plain years — shaders convert internally
-      const yrs = yrsRaw * KMS_TO_LYYR; // pre-converted for JS-side position math (labels, halos)
-      if (s.starMat) s.starMat.uniforms.uYears.value = yrsRaw;
-      if (s.astMat) s.astMat.uniforms.uYears.value = yrsRaw;
+      // Combined epoch: base scrub epoch + Earth-time elapsed on any active
+      // trip. Single time value read everywhere a position matters — the
+      // shader, picking, labels, halos, the reticle, the mission brief.
+      const tripEarthYearsNow = s.trip ? brachAt(s.trip.D, s.accel ?? 1, s.trip.frac).earthYears : 0;
+      s.effYears = (s.years ?? 0) + tripEarthYearsNow;
+      const yrs = s.effYears * KMS_TO_LYYR; // pre-converted for JS-side position math (labels, halos, pick, box-select)
+      if (s.starMat) s.starMat.uniforms.uYears.value = s.effYears;
+      if (s.astMat) s.astMat.uniforms.uYears.value = s.effYears;
       if (s.astLines) s.astLines.visible = s.showLines !== false;
       if (s.mode === "ship") {
         camera.position.copy(s.shipPos);
@@ -779,7 +803,7 @@ export default function App() {
 
       // ship-view target reticle
       if (s.mode === "ship" && s.targetIdx != null) {
-        const tp = starPos(s.targetIdx);
+        const tp = starPos(s.targetIdx, s.effYears);
         const v = labelPos.copy(tp).project(camera);
         const rect2 = el.getBoundingClientRect();
         const onScreen = v.z <= 1 && Math.abs(v.x) <= 1 && Math.abs(v.y) <= 1;
@@ -895,12 +919,14 @@ export default function App() {
   }, [selected, cat, years]);
 
   // ---------------- Derived measurements ----------------
-  // Time scrub only applies in atlas view — ship view always shows the
-  // present (see PLAN.md S4). Cards/brief use the star's position at the
-  // current epoch; closest-approach is a fixed fact about the trajectory
-  // (computed from the catalog's reference epoch, t=0), independent of
-  // wherever the scrub slider currently sits.
-  const effectiveYears = shipView ? 0 : years;
+  // Combined epoch (S4.6): base scrub epoch + Earth-time elapsed on an
+  // active trip (tripUi.earthYears, already computed by brachAt and
+  // throttled to ~150ms — plenty fresh for card text). Cards/brief use a
+  // star's position AT that epoch; closest-approach is a fixed fact about
+  // the trajectory (computed from the catalog's reference epoch, t=0),
+  // independent of wherever the epoch currently sits.
+  const tripEarthYearsUi = shipView && trip ? (tripUi?.earthYears ?? 0) : 0;
+  const effectiveYears = years + tripEarthYearsUi;
   const rawA = cat && selected[0] != null ? getStarOrSun(cat, selected[0]) : null;
   const rawB = cat && selected[1] != null ? getStarOrSun(cat, selected[1]) : null;
   const A = rawA ? advanceStar(rawA, effectiveYears) : null;
@@ -1085,6 +1111,11 @@ export default function App() {
             <div style={{ ...mono, fontSize: 10.5, color: "#8fa0c0", marginTop: 4 }}>
               drag — look around · scroll — zoom field of view
             </div>
+            <div style={{ ...mono, fontSize: 10, color: "#66779a", marginTop: 4 }}>
+              epoch <span style={{ color: AMBER }}>
+                {effectiveYears === 0 ? "NOW" : `T${effectiveYears > 0 ? "+" : "−"}${fmt(Math.abs(effectiveYears), 0)} yr`}
+              </span>{!trip && " — set the TIME slider to change your departure epoch"}
+            </div>
           </div>
         )}
         </Section>
@@ -1138,12 +1169,16 @@ export default function App() {
               onPick={(idx) => setSelected((prev) => (prev.length === 2 ? [idx, prev[1]] : [idx, prev[0]]))} />
           </Section>
         )}
-        {A && B && (
+        {A && (
           <div style={{ display: "flex", justifyContent: "center", padding: "6px 0" }}>
             <button
               onClick={() => {
-                const [oldOriginIdx, oldDestIdx] = selected;
-                setSelected(([a, b]) => [b, a]);
+                // Single-selection mode never puts the Sun IN `selected` — it's
+                // implicit. Swapping has to make it explicit (via SUN_IDX) so
+                // the Sun can land in either slot, same as any real star.
+                const oldOriginIdx = B ? selected[0] : SUN_IDX;
+                const oldDestIdx = B ? selected[1] : selected[0];
+                setSelected([oldDestIdx, oldOriginIdx]);
                 if (shipView) stateRef.current.swapView?.(oldOriginIdx, oldDestIdx);
               }}
               title="swap origin and destination"
@@ -1261,42 +1296,48 @@ export default function App() {
           )}
         </div>
 
-        {!shipView && (
-          <div style={{ ...panel, padding: "9px 10px" }}>
-            <div onClick={() => setTimeOpen((v) => !v)}
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: timeOpen ? 7 : 0 }}>
-              <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>TIME</span>
-              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{timeOpen ? "▾" : "▸"}</span>
-            </div>
-            {timeOpen && (
-              <>
-                <div style={{ ...serif, fontSize: 15, color: "#f0e8d8", textAlign: "center" }}>
-                  {years === 0 ? "NOW" : `T${years > 0 ? "+" : "−"}${fmt(Math.abs(years), 0)} yr`}
-                </div>
-                <input type="range" min={-YEARS_MAX} max={YEARS_MAX} step="100" value={years}
-                  onChange={(e) => stateRef.current.setYears?.(Number(e.target.value))}
-                  style={{ width: "100%", accentColor: AMBER, marginTop: 6 }} />
-                <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
-                  <button onClick={() => stateRef.current.setYearsPlaying?.(!yearsPlaying)}
-                    style={{ ...mono, fontSize: 11, width: 26, padding: "3px 0", background: "rgba(232,180,90,0.18)", border: "1px solid rgba(232,180,90,0.6)", color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
-                    {yearsPlaying ? "⏸" : "▶"}
-                  </button>
-                  {[["now", 0], ["−100k", -YEARS_MAX], ["+100k", YEARS_MAX]].map(([label, y]) => (
-                    <button key={label} onClick={() => stateRef.current.setYears?.(y)}
-                      style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
-                        background: years === y ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
-                        border: `1px solid rgba(232,180,90,${years === y ? 0.7 : 0.25})`, color: "#e8c88a" }}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
-                  stars advance on real 6D velocities · atlas view only
-                </div>
-              </>
-            )}
+        <div style={{ ...panel, padding: "9px 10px" }}>
+          <div onClick={() => setTimeOpen((v) => !v)}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: timeOpen ? 7 : 0 }}>
+            <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>TIME</span>
+            <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{timeOpen ? "▾" : "▸"}</span>
           </div>
-        )}
+          {timeOpen && (
+            <>
+              <div style={{ ...serif, fontSize: 15, color: "#f0e8d8", textAlign: "center" }}>
+                {effectiveYears === 0 ? "NOW" : `T${effectiveYears > 0 ? "+" : "−"}${fmt(Math.abs(effectiveYears), 0)} yr`}
+              </div>
+              {trip ? (
+                <div style={{ ...mono, fontSize: 9.5, color: "#8fa0c0", marginTop: 5, textAlign: "center" }}>
+                  advancing with Earth-time · departed at {years === 0 ? "NOW" : `T${years > 0 ? "+" : "−"}${fmt(Math.abs(years), 0)} yr`}
+                </div>
+              ) : (
+                <>
+                  <input type="range" min={-YEARS_MAX} max={YEARS_MAX} step="100" value={years}
+                    onChange={(e) => stateRef.current.setYears?.(Number(e.target.value))}
+                    style={{ width: "100%", accentColor: AMBER, marginTop: 6 }} />
+                  <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
+                    <button onClick={() => stateRef.current.setYearsPlaying?.(!yearsPlaying)}
+                      style={{ ...mono, fontSize: 11, width: 26, padding: "3px 0", background: "rgba(232,180,90,0.18)", border: "1px solid rgba(232,180,90,0.6)", color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
+                      {yearsPlaying ? "⏸" : "▶"}
+                    </button>
+                    {[["now", 0], ["−100k", -YEARS_MAX], ["+100k", YEARS_MAX]].map(([label, y]) => (
+                      <button key={label} onClick={() => stateRef.current.setYears?.(y)}
+                        style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+                          background: years === y ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
+                          border: `1px solid rgba(232,180,90,${years === y ? 0.7 : 0.25})`, color: "#e8c88a" }}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
+                    stars advance on real 6D velocities{shipView ? " · this is your departure epoch" : ""}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
 
         {selected.length > 0 && (
           <div style={{ ...panel, padding: "9px 10px" }}>
@@ -1411,6 +1452,11 @@ export default function App() {
               {tripUi.frac >= 1 && <span style={{ color: AMBER }}>ARRIVED</span>}
             </div>
           )}
+          <div style={{ ...mono, fontSize: 10, color: "#66779a", marginTop: 6, textAlign: "center" }}>
+            epoch <span style={{ color: AMBER }}>
+              {effectiveYears === 0 ? "NOW" : `T${effectiveYears > 0 ? "+" : "−"}${fmt(Math.abs(effectiveYears), 0)} yr`}
+            </span> — the sky outside keeps moving on real velocities while you fly
+          </div>
         </div>
       )}
 
@@ -1426,7 +1472,7 @@ export default function App() {
 
       {/* Credits */}
       <div style={{ position: "absolute", bottom: 8, right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
-        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed
+        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time
       </div>
     </div>
   );

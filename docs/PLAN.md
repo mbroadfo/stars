@@ -285,14 +285,14 @@ zoom-dependent core brightness attenuation, click-anything identity cards
 3. Performance — 60 fps in ship view with lines + both star tiers.
 4. Honesty — nothing procedural in the sky; relativistic toggles labeled.
 
-### S5 ⭐ — Seeing Relativity (test 1 shipped 2026-08-08; test 2 next)
+### S5 ⭐ — Seeing Relativity (test 1 shipped 2026-08-06; test 2 next)
 
 Two live, navigable renders of what the mission brief has only ever reported
 as numbers. Inspired by Overview Effekt's "Time Dilation Visualized" (the
 original spark for this whole app), which showed both as canned animation —
 we make both real and flyable.
 
-**Shipped 2026-08-08 — Test 1, the Orange Tube.** Custom swept-circle mesh
+**Shipped 2026-08-06 — Test 1, the Orange Tube.** Custom swept-circle mesh
 (48 segments × 12 radial, `buildGammaTube` in `App.jsx`) along the
 mission-brief's straight-line path, rebuilt on selection/accel change (not a
 per-frame cost — this is a ~600-vertex mesh, not the 268k-point star field).
@@ -444,3 +444,10 @@ only if S5/S6 prove people want to *live* in this thing.
 - PowerShell for anything run manually
 - No GitHub API calls in tooling — `raw.githubusercontent.com` reads only
 - Ask before adding dependencies beyond three, vite, pandas
+- After every PR merge, explicitly verify `devops-frontend.yml` actually ran
+  — don't assume the merge's push event triggered it. PR #3's merge
+  (2026-08-06) silently produced zero workflow runs, with no config
+  difference from the two merges before it that worked fine; root cause
+  unclear (likely a transient GitHub Actions hiccup, not a repo/workflow
+  regression), fixed by `gh workflow run devops-frontend.yml --ref master`
+  and confirmed via matching build hash. Cheap to check, expensive to miss.

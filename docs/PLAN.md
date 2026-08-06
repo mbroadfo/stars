@@ -285,38 +285,66 @@ zoom-dependent core brightness attenuation, click-anything identity cards
 3. Performance — 60 fps in ship view with lines + both star tiers.
 4. Honesty — nothing procedural in the sky; relativistic toggles labeled.
 
-### S5 ⭐ — Seeing Relativity (planned; proposed cut below, not yet built)
+### S5 ⭐ — Seeing Relativity (test 1 shipped 2026-08-08; test 2 next)
 
 Two live, navigable renders of what the mission brief has only ever reported
 as numbers. Inspired by Overview Effekt's "Time Dilation Visualized" (the
 original spark for this whole app), which showed both as canned animation —
 we make both real and flyable.
 
-**Test 1 — The Orange Tube.** A tube swept along the straight-line path
-between any two selected stars (works pre-flight, off the existing mission
-brief — no need to actually be flying), radius at each point an illustrative
-function of `brachAt(D, accel, f).gamma` at that point: wide at the endpoints
-(γ≈1, ship moves at mundane speed), narrowed to a bright wire at the midpoint
-(peak γ). Comparing two pairs at the same accel (e.g. Sol→Alpha Cen vs.
-Sol→Betelgeuse) should visibly show the second tube's relativistic "throat"
-occupying more of the trip even though total ship-years barely grows — the
-textbook logarithmic-distance-vs-ship-time result, to be verified numerically
-against our own `brachAt` before it's asserted as a gate (see: Barnard's
-Star — an assumed-correct claim gets checked against real numbers before it
-becomes a gate, not after).
+**Shipped 2026-08-08 — Test 1, the Orange Tube.** Custom swept-circle mesh
+(48 segments × 12 radial, `buildGammaTube` in `App.jsx`) along the
+mission-brief's straight-line path, rebuilt on selection/accel change (not a
+per-frame cost — this is a ~600-vertex mesh, not the 268k-point star field).
+Radius `r(f) = rMin + (rMax-rMin)/gamma(f)`, color lerps amber → white-hot by
+normalized γ; both endpoints exactly γ=1 by construction. Atlas view only —
+hides in ship view (confirmed: Orion's lines and the Betelgeuse reticle
+render with zero trace of the tube). **Gate 1 verified**: γ at f=0/0.5/1
+matches `brachAt` exactly, by construction — the geometry calls `brachAt`
+directly, no parallel formula to drift out of sync. **Gate 2 computed before
+being asserted** (own working agreement, re-applied): Sol→Rigil Kentaurus
+(4.32 ly, 1g) never crosses γ>5 (peak γ 3.23, 0% of ship-time) — Sol→
+Betelgeuse (497.9 ly, 1g) spends **63.85%** of its 12.1 ship-years above that
+threshold (peak γ 258.01) while costing only ~3.4× the ship-years for 115×
+the distance, matching the textbook logarithmic-compression claim with room
+to spare. Visually confirmed at both extremes: zoomed into the Sun end of
+the short Rigil Kentaurus tube shows an unmistakable wide venturi
+cross-section; the Betelgeuse tube renders as a thin bright line end-to-end
+at neighborhood zoom, as intended ("narrowed to a bright wire"). Honesty
+line added to the credits: the γ→radius mapping is explicitly illustrative.
 
-- Geometry: custom swept-circle mesh (linear path, so no curve-fitting
-  needed) — sample f across [0,1], radius `r(f)` from a chosen γ→radius
-  mapping, stitch a tube. **Honesty: the γ→radius mapping is illustrative**
-  (like the Milky Way outline) — label it as such; never let the tube's
-  radius be mistaken for a real spatial unit.
-- Gate 1: sampled γ at f=0, 0.5, 1 along the tube matches `brachAt`'s values
-  (departure/arrival γ=1 exactly; midpoint γ matches the mission brief's
-  already-displayed peak γ) to floating-point precision.
-- Gate 2 (compute before asserting): the fraction of ship-time spent above a
-  "deep relativistic" threshold (e.g. γ > 5) for Sol→Betelgeuse must exceed
-  that fraction for Sol→Alpha Cen at the same accel — a concrete, falsifiable
-  version of the throat-length claim above.
+**Test 2 — Travel-Time View.** A third atlas projection: every star's
+position slides along its existing sight-line (angular position from the
+origin never changes — from the origin's own viewpoint the constellations
+look identical) until its radial distance equals ship-years to reach it at
+the current accel. Betelgeuse compresses from 498 ly to single-digit
+ship-years; the observable neighborhood becomes a shallow shell. The morph
+between real-space and travel-time must be continuous, live-draggable, and
+flyable mid-transition (orbit/pan/zoom never lock) — same architecture
+pattern as S4's `years` scrub, not a new interaction mode.
+
+- Applies to **both** star tiers — travel-time only needs distance, not
+  velocity, so Tier 2's 145,128 far-field stars (no 6D data) participate too,
+  unlike S4's time-scrub which is Tier-1-only.
+- Precompute a `travelYears` attribute per star whenever accel changes
+  (acosh is too expensive to recompute per-vertex, every frame, at 268k
+  points) — a new uniform (`uMorph`) blends `position` toward
+  `direction * travelYears` in the shared star shader, mirroring `uYears`'s
+  displacement pattern.
+- **Honesty, load-bearing**: this is a render-only transform. Real physics
+  (tether, mission brief, closure, closest-approach) always reads real
+  positions regardless of which projection is on screen — never let a
+  star-to-star gap *in this view* be read as a distance anywhere in the UI.
+  Radial distance from the origin is the one meaningful number here (it IS
+  ship-time); label it plainly.
+- Combining Travel-Time View with time-scrub epochs stays deferred (as
+  already noted at S4) — two independent remaps of "where a star is drawn"
+  is a real feature, just not this one.
+- Gate 3: a star's travel-time radius matches the mission brief's own
+  ship-years reading for that same pair, to displayed precision — the view
+  visualizes a number the app already trusts, it doesn't compute a new one.
+- Gate 4: 60 fps sustained through a full morph sweep at both tiers (268k
+  points).
 
 **Test 2 — Travel-Time View.** A third atlas projection: every star's
 position slides along its existing sight-line (angular position from the

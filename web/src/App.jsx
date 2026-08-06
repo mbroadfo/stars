@@ -22,6 +22,56 @@ const KMS_TO_LYYR = 1 / C_KMS; // km/s -> ly/yr, for time-scrub position displac
 const YEARS_PER_SEC = 2500;    // playback rate: a full ±100k sweep takes 80s
 const YEARS_MAX = 100000;
 
+// The Orange Tube (S5 test 1): a swept-circle mesh along the straight line
+// from `from` to `to`, radius at each point an ILLUSTRATIVE function of
+// brachAt's gamma there — wide at gamma=1 (endpoints), narrow at peak gamma.
+// Color tapers amber -> white-hot the same way. Returns {positions, colors,
+// indices} as plain arrays (caller uploads into a BufferGeometry).
+const TUBE_SEGMENTS = 48; // along the path
+const TUBE_RADIAL = 12;   // around the circumference
+function buildGammaTube(from, to, D, accel) {
+  const dir = to.clone().sub(from);
+  const len = dir.length();
+  if (len < 1e-6) return null;
+  dir.normalize();
+  // Any vector not parallel to dir, then Gram-Schmidt to get an orthonormal pair.
+  const seed = Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const u = seed.clone().sub(dir.clone().multiplyScalar(seed.dot(dir))).normalize();
+  const v = dir.clone().cross(u);
+
+  const peakGamma = brachAt(D, accel, 0.5).gamma;
+  const rMax = Math.max(len * 0.018, 0.05);
+  const rMin = rMax * 0.08; // never fully closes — a "bright wire", not a seam
+  const amberC = new THREE.Color(AMBER), hotC = new THREE.Color(0xfff6e8);
+
+  const positions = [], colors = [];
+  for (let i = 0; i <= TUBE_SEGMENTS; i++) {
+    const f = i / TUBE_SEGMENTS;
+    const gamma = brachAt(D, accel, f).gamma;
+    const r = rMin + (rMax - rMin) / gamma;
+    const heat = peakGamma > 1 ? (gamma - 1) / (peakGamma - 1) : 0;
+    const c = amberC.clone().lerp(hotC, Math.min(1, heat));
+    const center = from.clone().addScaledVector(dir, f * len);
+    for (let j = 0; j < TUBE_RADIAL; j++) {
+      const theta = (j / TUBE_RADIAL) * Math.PI * 2;
+      const p = center.clone()
+        .addScaledVector(u, Math.cos(theta) * r)
+        .addScaledVector(v, Math.sin(theta) * r);
+      positions.push(p.x, p.y, p.z);
+      colors.push(c.r, c.g, c.b);
+    }
+  }
+  const indices = [];
+  for (let i = 0; i < TUBE_SEGMENTS; i++) {
+    for (let j = 0; j < TUBE_RADIAL; j++) {
+      const a = i * TUBE_RADIAL + j, b = i * TUBE_RADIAL + ((j + 1) % TUBE_RADIAL);
+      const c = a + TUBE_RADIAL, d = b + TUBE_RADIAL;
+      indices.push(a, c, b, b, c, d);
+    }
+  }
+  return { positions, colors, indices, peakGamma };
+}
+
 export default function App() {
   const mountRef = useRef(null);
   const labelsRef = useRef(null);
@@ -478,6 +528,23 @@ export default function App() {
     scene.add(tether);
     s.tether = tether;
 
+    // --- The Orange Tube (S5 test 1) — a venturi along the mission-brief
+    // path, radius an ILLUSTRATIVE function of gamma(f) at each point: wide
+    // at the endpoints (gamma≈1), narrowed to a bright wire at peak gamma.
+    // Geometry rebuilt on selection/accel change (see the useEffect below);
+    // not a per-frame cost. Color rides the same taper: amber (gamma≈1) to
+    // white-hot (peak gamma).
+    const tubeGeo = new THREE.BufferGeometry();
+    const tubeMat = new THREE.MeshBasicMaterial({
+      vertexColors: true, transparent: true, opacity: 0.4,
+      side: THREE.DoubleSide, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const tubeMesh = new THREE.Mesh(tubeGeo, tubeMat);
+    tubeMesh.visible = false;
+    tubeMesh.frustumCulled = false;
+    scene.add(tubeMesh);
+    s.tubeMesh = tubeMesh;
+
     // Selection halo rings
     const mkHalo = (color) => {
       const cnv = document.createElement("canvas"); cnv.width = cnv.height = 64;
@@ -917,6 +984,34 @@ export default function App() {
       pts.needsUpdate = true; s.tether.visible = true;
     } else s.tether.visible = false;
   }, [selected, cat, years]);
+
+  // Rebuild the Orange Tube (S5 test 1) whenever the mission-brief pair or
+  // accel changes. Atlas view only — a pre-flight comparison tool, not meant
+  // to clutter first-person ship view.
+  useEffect(() => {
+    const s = stateRef.current;
+    if (!s.tubeMesh || !cat) return;
+    if (shipView || selected.length === 0) { s.tubeMesh.visible = false; return; }
+    const yrs = years;
+    const endA = advanceStar(getStarOrSun(cat, selected[0]), yrs);
+    const from = selected.length === 2 ? new THREE.Vector3(endA.x, endA.y, endA.z) : new THREE.Vector3(0, 0, 0);
+    let to;
+    if (selected.length === 2) {
+      const endB = advanceStar(getStarOrSun(cat, selected[1]), yrs);
+      to = new THREE.Vector3(endB.x, endB.y, endB.z);
+    } else {
+      to = new THREE.Vector3(endA.x, endA.y, endA.z);
+    }
+    const D = from.distanceTo(to);
+    const built = D > 1e-6 ? buildGammaTube(from, to, D, accel) : null;
+    if (!built) { s.tubeMesh.visible = false; return; }
+    const geo = s.tubeMesh.geometry;
+    geo.setAttribute("position", new THREE.Float32BufferAttribute(built.positions, 3));
+    geo.setAttribute("color", new THREE.Float32BufferAttribute(built.colors, 3));
+    geo.setIndex(built.indices);
+    geo.computeVertexNormals();
+    s.tubeMesh.visible = true;
+  }, [selected, cat, years, accel, shipView]);
 
   // ---------------- Derived measurements ----------------
   // Combined epoch (S4.6): base scrub epoch + Earth-time elapsed on an
@@ -1472,7 +1567,7 @@ export default function App() {
 
       {/* Credits */}
       <div style={{ position: "absolute", bottom: 8, right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
-        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time
+        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time · the mission-brief tube's width is an illustrative function of γ, not a real spatial unit
       </div>
     </div>
   );

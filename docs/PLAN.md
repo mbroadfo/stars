@@ -12,6 +12,13 @@ with real velocity vectors, SketchUp-style navigation (orbit/pan/zoom), and
 - Intercept navigation: aim where a star will be, not where it is
 - Deep-time scrubbing: ±100k years via real velocity vectors
 
+**S0–S4.6 built the map and the first instruments. S5–S6 build the reasons
+this app exists nowhere else**: ways of *seeing* relativity, and ways of
+*inhabiting* the catalog — as a plague, as a fiction, as a traveler's
+compressed lifetime. The emotional target, always: the user should
+periodically stop and say "wait — that's REAL?" Every feature is in service
+of that moment.
+
 **Design language:** "observatory brass" — near-black indigo space, amber accents
 (`#e8b45a`), Georgia serif display type, monospace data readouts. Chart cartouche,
 not game HUD.
@@ -93,7 +100,7 @@ Architecture decisions (first consumer of spa-on-aws):
   catalog is NOT committed — `devops-data.yml` rebuilds it from AT-HYG on the
   runner (deterministic, ~5 min), runs the S1 round-trip gate, and only on pass
   syncs to `s3://{bucket}/data/tier1/` + invalidates `/data/*`. Triggered
-  manually or on `pipeline/**` changes. Scales unchanged to the S6 full catalog.
+  manually or on `pipeline/**` changes. Scales unchanged to the S7 full catalog.
 - `devops-frontend.yml` (on `web/**`) builds and syncs the app but excludes
   `data/*` from its `--delete` — the catalog survives frontend deploys.
 - CloudFront gets a dedicated `/data/*` behavior: 1-day edge TTL (the buffer
@@ -199,8 +206,8 @@ arrival reads T+27 yr, matching the mission brief's known 26.9 Earth-year
 total. Ships fly a *fixed* two-point line captured at departure — a
 destination's own rendered point can drift from that fixed line over long
 / fast-moving trips, which is honest (real interstellar flight has exactly
-this problem) and exactly why intercept navigation is its own S5 feature,
-not folded in here. Also fixed: swap was unreachable whenever the Sun was
+this problem) and exactly why intercept navigation is its own deferred
+feature (see Backlog), not folded in here. Also fixed: swap was unreachable whenever the Sun was
 the *implicit* (unselected) origin — single-star selection never puts the
 Sun in `selected`, so the button's `A && B` visibility check was always
 false for the single-star case, even though ship view always has a
@@ -278,17 +285,127 @@ zoom-dependent core brightness attenuation, click-anything identity cards
 3. Performance — 60 fps in ship view with lines + both star tiers.
 4. Honesty — nothing procedural in the sky; relativistic toggles labeled.
 
-### S5 ⭐ — Route planner
+### S5 ⭐ — Seeing Relativity (planned; proposed cut below, not yet built)
 
-Multi-hop route planner with crew-age / Earth-calendar ledger + lead-pursuit
-intercept solver (aim at future position).
+Two live, navigable renders of what the mission brief has only ever reported
+as numbers. Inspired by Overview Effekt's "Time Dilation Visualized" (the
+original spark for this whole app), which showed both as canned animation —
+we make both real and flyable.
 
-### S6 — Full catalog
+**Test 1 — The Orange Tube.** A tube swept along the straight-line path
+between any two selected stars (works pre-flight, off the existing mission
+brief — no need to actually be flying), radius at each point an illustrative
+function of `brachAt(D, accel, f).gamma` at that point: wide at the endpoints
+(γ≈1, ship moves at mundane speed), narrowed to a bright wire at the midpoint
+(peak γ). Comparing two pairs at the same accel (e.g. Sol→Alpha Cen vs.
+Sol→Betelgeuse) should visibly show the second tube's relativistic "throat"
+occupying more of the trip even though total ship-years barely grows — the
+textbook logarithmic-distance-vs-ship-time result, to be verified numerically
+against our own `brachAt` before it's asserted as a gate (see: Barnard's
+Star — an assumed-correct claim gets checked against real numbers before it
+becomes a gate, not after).
 
-Go/no-go: octree streaming of the full 2.5M-star set.
+- Geometry: custom swept-circle mesh (linear path, so no curve-fitting
+  needed) — sample f across [0,1], radius `r(f)` from a chosen γ→radius
+  mapping, stitch a tube. **Honesty: the γ→radius mapping is illustrative**
+  (like the Milky Way outline) — label it as such; never let the tube's
+  radius be mistaken for a real spatial unit.
+- Gate 1: sampled γ at f=0, 0.5, 1 along the tube matches `brachAt`'s values
+  (departure/arrival γ=1 exactly; midpoint γ matches the mission brief's
+  already-displayed peak γ) to floating-point precision.
+- Gate 2 (compute before asserting): the fraction of ship-time spent above a
+  "deep relativistic" threshold (e.g. γ > 5) for Sol→Betelgeuse must exceed
+  that fraction for Sol→Alpha Cen at the same accel — a concrete, falsifiable
+  version of the throat-length claim above.
+
+**Test 2 — Travel-Time View.** A third atlas projection: every star's
+position slides along its existing sight-line (angular position from the
+origin never changes — from the origin's own viewpoint the constellations
+look identical) until its radial distance equals ship-years to reach it at
+the current accel. Betelgeuse compresses from 548 ly to single-digit
+ship-years; the observable neighborhood becomes a shallow shell. The morph
+between real-space and travel-time must be continuous, live-draggable, and
+flyable mid-transition (orbit/pan/zoom never lock) — same architecture
+pattern as S4's `years` scrub, not a new interaction mode.
+
+- Applies to **both** star tiers — travel-time only needs distance, not
+  velocity, so Tier 2's 145,128 far-field stars (no 6D data) participate too,
+  unlike S4's time-scrub which is Tier-1-only.
+- Precompute a `travelYears` attribute per star whenever accel changes
+  (acosh is too expensive to recompute per-vertex, every frame, at 268k
+  points) — a new uniform (`uMorph`) blends `position` toward
+  `direction * travelYears` in the shared star shader, mirroring `uYears`'s
+  displacement pattern.
+- **Honesty, load-bearing**: this is a render-only transform. Real physics
+  (tether, mission brief, closure, closest-approach) always reads real
+  positions regardless of which projection is on screen — never let a
+  star-to-star gap *in this view* be read as a distance anywhere in the UI.
+  Radial distance from the origin is the one meaningful number here (it IS
+  ship-time); label it plainly.
+- Combining Travel-Time View with time-scrub epochs stays deferred (as
+  already noted at S4) — two independent remaps of "where a star is drawn"
+  is a real feature, just not this one.
+- Gate 3: a star's travel-time radius matches the mission brief's own
+  ship-years reading for that same pair, to displayed precision — the view
+  visualizes a number the app already trusts, it doesn't compute a new one.
+- Gate 4: 60 fps sustained through a full morph sweep at both tiers (268k
+  points).
+
+### S6 — Layers & Labs (planned; depends on S5's shader-morph pattern)
+
+One new piece of shared infrastructure unlocks two features: **a spatial
+neighbor index over Tier 1** ("which stars lie within R ly of X"). Proposed:
+a uniform 3D grid (cell size ≈ typical query radius), built once at load —
+not a k-d tree/octree (over-engineered at 123k stars; that's S7's problem at
+2.5M) and not brute-force-per-query either (fine per-hop, but a
+multi-thousand-hop percolation run would add up) — a grid is the right size
+tool for this job.
+
+**The Infection Lab.** *Project Hail Mary*'s astrophage spreads star-to-star
+with an 8 ly range; the source video *claims* that range would consume the
+galaxy without ever testing it. Let the user test it instead of animating the
+claim. Controls: hop range (ly), transmission chance per hop (so spread can
+stochastically fizzle — intentionally non-deterministic, no seeded RNG
+needed, "different outcome each run" is the point), incubation time per hop,
+patient zero (search or click any real star). BFS wave propagation assigns
+each newly-infected star an infection epoch (cumulative incubation delay) —
+**reuse S4's time-scrub slider verbatim** to scrub through and watch the
+infection actually spread star-by-star, rather than building a second
+timeline control from scratch. Live stats: infected count, %, generation,
+percolated-or-died. This is a percolation laboratory wearing a sci-fi
+costume — both identities stay visible, neither is hidden behind the other.
+
+**Universes.** A curated-JSON catalog of sci-fi settings mapped onto real
+stars: author/work, star mappings (real index ↔ fictional name, each with a
+canon citation — omit or flag any mapping that can't be sourced, never guess
+one in), and canon routes. A route is a multi-hop sequence handed to the
+trip engine — **this needs the trip engine to chain legs**, accumulating a
+running crew-age/Earth-calendar ledger across the whole route, which is
+exactly the substance of the old, now-unscheduled "route planner" idea (see
+Backlog) resurfacing here as a real S6 prerequisite, not a deferred nicety.
+First universe: Niven's Known Space — deliberately chosen because its
+colonization era is STL slowboats under constant acceleration, so Sol→
+Wunderland (Alpha Centauri) in ship view *is* the slowboat experience our
+own journey math already computes; canon star mappings to be fact-checked
+against source material at build time, not asserted from memory here.
+Second universe: *Project Hail Mary* itself — Tau Ceti, with the astrophage
+trace-back chain built as a hop-constrained path through the same neighbor
+index the Infection Lab uses (deliberate machinery kinship, not a
+coincidence).
+
+### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
+
+Decision point after S6, not before — the 2.5M-star octree earns a build
+only if S5/S6 prove people want to *live* in this thing.
 
 ### Backlog
 
+- Multi-hop route planner with crew-age/Earth-calendar ledger — largely
+  unscheduled, but S6's Universes canon routes need leg-chaining anyway, so
+  expect this to arrive as an S6 side effect rather than its own stage.
+- Intercept navigation (aim where a star *will be*, not where it is) — the
+  natural companion to a fixed-line trip visibly missing a fast-moving
+  destination, which S4.6 made visible but doesn't fix.
 - Radiosphere: 110 ly broadcast bubble vs. exoplanet systems
 - Earth Transit Zone
 - Gaia DR3 deep field

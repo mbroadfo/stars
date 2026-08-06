@@ -179,6 +179,36 @@ highlight by live camera distance instead of never indicating the current
 view. First-run help is now a centered dismissible overlay instead of a
 top-right panel that collided with the new rail.
 
+**Shipped 2026-08-06 — combined time+space travel + swap-with-Sun fix:**
+one unified epoch now drives everything — `s.effYears = baseEpoch +
+(active trip's Earth-time elapsed)`, computed once per frame and read by
+the shader, picking, labels, the reticle, and the mission brief alike, in
+both atlas and ship view. Concretely: scrub the TIME slider in ship view
+before departing to set your *departure* epoch (previously forced to 0);
+once you `Start trip`, the epoch advances automatically on Earth-time
+(not ship-time — that's the physically correct clock, since relativity
+dilates the crew's clock, not the universe's) while the manual
+slider/play controls disable in favor of a live read-only readout; landing
+(`Back to atlas`) bakes the elapsed epoch into the base scrub value, so
+"the universe moved on while you were away" is where you land, not just a
+mission-brief number — the next departure continues from there. Verified:
+mid-flight epoch tracks Earth-time exactly (T+5,000 departure + 3 Earth-yr
+elapsed at 7.5% distance into a 1g Sun→Vega leg — small because early
+brachistochrone distance-vs-time is highly nonlinear, not a bug); full-trip
+arrival reads T+27 yr, matching the mission brief's known 26.9 Earth-year
+total. Ships fly a *fixed* two-point line captured at departure — a
+destination's own rendered point can drift from that fixed line over long
+/ fast-moving trips, which is honest (real interstellar flight has exactly
+this problem) and exactly why intercept navigation is its own S5 feature,
+not folded in here. Also fixed: swap was unreachable whenever the Sun was
+the *implicit* (unselected) origin — single-star selection never puts the
+Sun in `selected`, so the button's `A && B` visibility check was always
+false for the single-star case, even though ship view always has a
+well-defined Sun-or-star origin and destination. Swap's `onClick` now
+promotes the implicit Sun to the explicit `SUN_IDX` slot on click, so
+"Vega → Sun" (fly home) is one click away from a single-star pick, not
+walled off behind a manual Sun search first.
+
 Remaining: aberration/Doppler toggle (phase 2), label-collision +
 core-blowout polish, click-anything identity cards, origin/destination
 name search (autocomplete over named + designated stars, with "Sun" as a

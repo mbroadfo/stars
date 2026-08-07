@@ -1,7 +1,7 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import * as THREE from "three";
 import { loadCatalog, loadFarField, getStar, STRIDE, CI_SENTINEL } from "./lib/catalog.js";
-import { journey, brachAt, closureRate, separationLy, advanceStar, closestApproach, fmt, fmtYears, KM_PER_LY, C_KMS } from "./lib/physics.js";
+import { journey, brachAt, closureRate, separationLy, advanceStar, closestApproach, fmt, fmtYears, KM_PER_LY, C_KMS, G_LY_YR2 } from "./lib/physics.js";
 import { ciToRgb, rgbToCss } from "./lib/color.js";
 
 /* ============================================================
@@ -27,7 +27,21 @@ const YEARS_MAX = 100000;
 // brachAt's gamma there — wide at gamma=1 (endpoints), narrow at peak gamma.
 // Color tapers amber -> white-hot the same way. Returns {positions, colors,
 // indices} as plain arrays (caller uploads into a BufferGeometry).
-const TUBE_SEGMENTS = 48; // along the path
+//
+// Rings are placed at EQUAL STEPS OF SHIP-TIME, not equal steps of distance.
+// Under constant proper acceleration, gamma grows so fast with distance that
+// uniform-in-distance sampling dumps nearly the whole radius taper into the
+// first few percent of the path — 48 evenly-spaced-by-distance segments put
+// maybe 2 of them inside the actual transition, so it renders as a faceted
+// cone welded to a cylinder, not a curve. Ship-time is the physically
+// meaningful clock here anyway (it's what the crew ages), and it inverts to
+// distance-fraction in closed form: shipYears = acosh(gamma)/a, so
+// gamma = cosh(a * shipYears), and gamma = 1 + a*D*f gives
+// f = (cosh(a*shipYears) - 1) / (a*D). Equal ship-time steps -> dense rings
+// near departure/arrival (where a little of the crew's time covers a little
+// distance) and sparse rings mid-trip (where a little of their time covers a
+// huge distance at near-c) -- exactly where the curve needs the resolution.
+const TUBE_SEGMENTS = 48; // along the path, split evenly between the two halves
 const TUBE_RADIAL = 12;   // around the circumference
 function buildGammaTube(from, to, D, accel) {
   const dir = to.clone().sub(from);
@@ -39,14 +53,25 @@ function buildGammaTube(from, to, D, accel) {
   const u = seed.clone().sub(dir.clone().multiplyScalar(seed.dot(dir))).normalize();
   const v = dir.clone().cross(u);
 
-  const peakGamma = brachAt(D, accel, 0.5).gamma;
+  const half = brachAt(D, accel, 0.5); // peak gamma + ship-time to reach the midpoint
+  const peakGamma = half.gamma;
+  const accelLyYr2 = accel * G_LY_YR2;
   const rMax = Math.max(len * 0.018, 0.05);
   const rMin = rMax * 0.08; // never fully closes — a "bright wire", not a seam
   const amberC = new THREE.Color(AMBER), hotC = new THREE.Color(0xfff6e8);
 
+  const HALF = TUBE_SEGMENTS / 2;
+  const accelFs = [0];
+  for (let i = 1; i <= HALF; i++) {
+    const t = half.shipYears * (i / HALF); // even step of ship-time, 0..peak
+    const gamma = Math.cosh(accelLyYr2 * t);
+    accelFs.push(Math.min(0.5, (gamma - 1) / (accelLyYr2 * D)));
+  }
+  accelFs[HALF] = 0.5; // exact midpoint, not a cosh round-off
+  const fs = accelFs.concat(accelFs.slice(0, -1).reverse().map((f) => 1 - f));
+
   const positions = [], colors = [];
-  for (let i = 0; i <= TUBE_SEGMENTS; i++) {
-    const f = i / TUBE_SEGMENTS;
+  for (const f of fs) {
     const gamma = brachAt(D, accel, f).gamma;
     const r = rMin + (rMax - rMin) / gamma;
     const heat = peakGamma > 1 ? (gamma - 1) / (peakGamma - 1) : 0;
@@ -62,11 +87,11 @@ function buildGammaTube(from, to, D, accel) {
     }
   }
   const indices = [];
-  for (let i = 0; i < TUBE_SEGMENTS; i++) {
+  for (let i = 0; i < fs.length - 1; i++) {
     for (let j = 0; j < TUBE_RADIAL; j++) {
-      const a = i * TUBE_RADIAL + j, b = i * TUBE_RADIAL + ((j + 1) % TUBE_RADIAL);
-      const c = a + TUBE_RADIAL, d = b + TUBE_RADIAL;
-      indices.push(a, c, b, b, c, d);
+      const ia = i * TUBE_RADIAL + j, ib = i * TUBE_RADIAL + ((j + 1) % TUBE_RADIAL);
+      const ic = ia + TUBE_RADIAL, id = ib + TUBE_RADIAL;
+      indices.push(ia, ic, ib, ib, ic, id);
     }
   }
   return { positions, colors, indices, peakGamma };

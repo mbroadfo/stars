@@ -313,6 +313,24 @@ cross-section; the Betelgeuse tube renders as a thin bright line end-to-end
 at neighborhood zoom, as intended ("narrowed to a bright wire"). Honesty
 line added to the credits: the γ→radius mapping is explicitly illustrative.
 
+**Follow-up 2026-08-06 — ring placement fixed (user-caught).** Original
+build placed the 48 rings at *equal steps of distance*, but γ grows so fast
+under constant proper acceleration that ~96% of the entire radius taper
+happens within the first 5% of the distance — uniform-in-distance sampling
+put only ~2 of 48 rings inside that transition, so it rendered as a faceted
+cone welded to a cylinder, not a curve (correctly flagged as "not
+relativistic" on sight, even though the underlying γ formula was never
+wrong — the *tessellation* was). Fixed by placing rings at **equal steps of
+ship-time** instead: physically meaningful (ship-time is what the crew
+ages, already the app's own framing) rather than an arbitrary rendering
+convenience, and it inverts to distance-fraction in closed form
+(`shipYears = acosh(γ)/a` ⟺ `γ = cosh(a·t)`, `f = (γ−1)/(a·D)` — no
+numerical root-finding). Verified numerically: the largest single
+ring-to-ring radius jump for the Betelgeuse tube dropped from what would
+have been a ~91% collapse in one step under the old sampling to **11.9%**
+under the new one; the profile now descends in smooth small increments
+(100%→16%→12%→10%→9%→8.6%→8.4% of rMax from f=0 to f=0.5).
+
 **Test 2 — Travel-Time View.** A third atlas projection: every star's
 position slides along its existing sight-line (angular position from the
 origin never changes — from the origin's own viewpoint the constellations

@@ -331,6 +331,20 @@ have been a ~91% collapse in one step under the old sampling to **11.9%**
 under the new one; the profile now descends in smooth small increments
 (100%→16%→12%→10%→9%→8.6%→8.4% of rMax from f=0 to f=0.5).
 
+**Follow-up 2026-08-07 — whole-ship-year rings (user's idea).** A bright
+ring drawn around the tube at every whole ship-year, reusing the same
+closed-form γ↔f inversion already built for ring placement. Not just
+decoration — the *spacing* between consecutive year-rings visualizes time
+dilation directly: for Sol→Betelgeuse the gap between year 1→2 is 2.35 ly,
+widening to **168.86 ly** between years 6→7 (right around peak γ), then
+narrowing back to 0.69 ly between years 11→12 near arrival — a crew-year
+stops mapping to meaningful distance once you're deep in relativistic
+territory, and the rings show that as a visible spacing pattern rather
+than a number to read off the mission brief. Visually confirmed: an
+ICE-colored ring crosses the Sirius tube at roughly its expected f≈0.34
+(year 2 of 4). Credits line updated: "the rings around it mark whole
+ship-years — their spacing, not their size, is the point."
+
 **Test 2 — Travel-Time View.** A third atlas projection: every star's
 position slides along its existing sight-line (angular position from the
 origin never changes — from the origin's own viewpoint the constellations

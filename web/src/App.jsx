@@ -94,7 +94,33 @@ function buildGammaTube(from, to, D, accel) {
       indices.push(ia, ic, ib, ib, ic, id);
     }
   }
-  return { positions, colors, indices, peakGamma };
+
+  // Whole-ship-year rings: a literal calendar around the tube. Departure is
+  // t=0; arrival is totalShipYears (exactly 2x the ship-time to the
+  // midpoint, by the accelerate/decelerate profile's own symmetry). Spacing
+  // between consecutive rings IS time dilation made visible — they crowd
+  // together near departure/arrival (a year covers little distance yet) and
+  // spread far apart near peak gamma (a year covers most of the trip).
+  const totalShipYears = 2 * half.shipYears;
+  const yearRingPositions = [];
+  const YEAR_RING_SEGS = 24;
+  for (let yr = 1; yr < totalShipYears; yr++) {
+    const onFirstHalf = yr <= half.shipYears;
+    const t = onFirstHalf ? yr : totalShipYears - yr;
+    const gamma = Math.cosh(accelLyYr2 * t);
+    let f = Math.min(0.5, (gamma - 1) / (accelLyYr2 * D));
+    if (!onFirstHalf) f = 1 - f;
+    const rGamma = brachAt(D, accel, f).gamma;
+    const r = rMin + (rMax - rMin) / rGamma;
+    const center = from.clone().addScaledVector(dir, f * len);
+    for (let j = 0; j < YEAR_RING_SEGS; j++) {
+      const t0 = (j / YEAR_RING_SEGS) * Math.PI * 2, t1 = ((j + 1) / YEAR_RING_SEGS) * Math.PI * 2;
+      const p0 = center.clone().addScaledVector(u, Math.cos(t0) * r).addScaledVector(v, Math.sin(t0) * r);
+      const p1 = center.clone().addScaledVector(u, Math.cos(t1) * r).addScaledVector(v, Math.sin(t1) * r);
+      yearRingPositions.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z);
+    }
+  }
+  return { positions, colors, indices, peakGamma, totalShipYears, yearRingPositions };
 }
 
 export default function App() {
@@ -570,6 +596,20 @@ export default function App() {
     scene.add(tubeMesh);
     s.tubeMesh = tubeMesh;
 
+    // Whole-ship-year rings around the tube — a literal calendar. Their
+    // SPACING (not their size) carries the story: bunched near departure/
+    // arrival, spread wide near peak gamma, since that's exactly where a
+    // year of the crew's life stops mapping to much distance at all.
+    const yearRingGeo = new THREE.BufferGeometry();
+    const yearRingMat = new THREE.LineBasicMaterial({
+      color: ICE, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const yearRings = new THREE.LineSegments(yearRingGeo, yearRingMat);
+    yearRings.visible = false;
+    yearRings.frustumCulled = false;
+    scene.add(yearRings);
+    s.tubeYearRings = yearRings;
+
     // Selection halo rings
     const mkHalo = (color) => {
       const cnv = document.createElement("canvas"); cnv.width = cnv.height = 64;
@@ -1016,7 +1056,11 @@ export default function App() {
   useEffect(() => {
     const s = stateRef.current;
     if (!s.tubeMesh || !cat) return;
-    if (shipView || selected.length === 0) { s.tubeMesh.visible = false; return; }
+    if (shipView || selected.length === 0) {
+      s.tubeMesh.visible = false;
+      if (s.tubeYearRings) s.tubeYearRings.visible = false;
+      return;
+    }
     const yrs = years;
     const endA = advanceStar(getStarOrSun(cat, selected[0]), yrs);
     const from = selected.length === 2 ? new THREE.Vector3(endA.x, endA.y, endA.z) : new THREE.Vector3(0, 0, 0);
@@ -1029,13 +1073,27 @@ export default function App() {
     }
     const D = from.distanceTo(to);
     const built = D > 1e-6 ? buildGammaTube(from, to, D, accel) : null;
-    if (!built) { s.tubeMesh.visible = false; return; }
+    if (!built) {
+      s.tubeMesh.visible = false;
+      if (s.tubeYearRings) s.tubeYearRings.visible = false;
+      return;
+    }
     const geo = s.tubeMesh.geometry;
     geo.setAttribute("position", new THREE.Float32BufferAttribute(built.positions, 3));
     geo.setAttribute("color", new THREE.Float32BufferAttribute(built.colors, 3));
     geo.setIndex(built.indices);
     geo.computeVertexNormals();
     s.tubeMesh.visible = true;
+    if (s.tubeYearRings) {
+      if (built.yearRingPositions.length > 0) {
+        const rGeo = s.tubeYearRings.geometry;
+        rGeo.setAttribute("position", new THREE.Float32BufferAttribute(built.yearRingPositions, 3));
+        rGeo.setIndex(null);
+        s.tubeYearRings.visible = true;
+      } else {
+        s.tubeYearRings.visible = false; // trip under 1 ship-year — no whole-year mark to show
+      }
+    }
   }, [selected, cat, years, accel, shipView]);
 
   // ---------------- Derived measurements ----------------
@@ -1592,7 +1650,7 @@ export default function App() {
 
       {/* Credits */}
       <div style={{ position: "absolute", bottom: 8, right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
-        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time · the mission-brief tube's width is an illustrative function of γ, not a real spatial unit
+        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time · the mission-brief tube's width is an illustrative function of γ, not a real spatial unit · the rings around it mark whole ship-years — their spacing, not their size, is the point
       </div>
     </div>
   );

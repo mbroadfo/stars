@@ -43,6 +43,22 @@ const YEARS_MAX = 100000;
 // huge distance at near-c) -- exactly where the curve needs the resolution.
 const TUBE_SEGMENTS = 48; // along the path, split evenly between the two halves
 const TUBE_RADIAL = 12;   // around the circumference
+// Travel-Time View (S5 test 2): ship-years to reach each star at `accel`,
+// from real (x,y,z) triples packed at `stride`-float intervals starting at
+// `offset`. Precomputed once per accel change — acosh (inside journey()) is
+// too expensive to run per-vertex, every frame, at 268k points. Reused both
+// as a GPU attribute (shader-side morph) and read directly in JS (picking,
+// labels — see morphedPos in the scene effect) so both stay exactly in sync.
+function computeTravelYears(data, stride, offset, count, accel) {
+  const out = new Float32Array(count);
+  for (let i = 0; i < count; i++) {
+    const o = i * stride + offset;
+    const d = Math.hypot(data[o], data[o + 1], data[o + 2]);
+    out[i] = journey(d, accel).shipYears;
+  }
+  return out;
+}
+
 function buildGammaTube(from, to, D, accel) {
   const dir = to.clone().sub(from);
   const len = dir.length();
@@ -160,6 +176,13 @@ export default function App() {
   const [yearsPlaying, setYearsPlaying] = useState(false);
   const [timeOpen, setTimeOpen] = useState(true);
 
+  // Travel-Time View (S5 test 2) — a third atlas projection: radial distance
+  // from the origin becomes ship-years to reach it at the current accel;
+  // angle unchanged. Render-only (see honesty note at the shader) — atlas
+  // view only, forced to 0 in ship view, same as the tube.
+  const [travelMorph, setTravelMorph] = useState(0); // 0 = real space, 1 = fully morphed
+  const [travelOpen, setTravelOpen] = useState(true);
+
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
   useEffect(() => { stateRef.current.showLines = showLines; }, [showLines]);
@@ -167,6 +190,7 @@ export default function App() {
   useEffect(() => { stateRef.current.gateLy = gateLy; }, [gateLy]);
   useEffect(() => { stateRef.current.boxSelect = boxSelectOn; }, [boxSelectOn]);
   useEffect(() => { stateRef.current.years = years; }, [years]);
+  useEffect(() => { stateRef.current.travelMorph = travelMorph; }, [travelMorph]);
 
   // shared by 3D click-picking and the box-select results list: fills the
   // next empty slot, or replaces the older slot once both are full
@@ -365,6 +389,7 @@ export default function App() {
       uShipPos: { value: new THREE.Vector3() },
       uMagLimit: { value: 99 },
       uGate: { value: 0 },
+      uMorph: { value: 0 }, // Travel-Time View: 0 = real space, 1 = fully morphed
     });
 
     // Tier 1 packs Sun-apparent magnitude; from the ship the apparent mag is
@@ -374,13 +399,22 @@ export default function App() {
       uniforms: { ...shipUniforms(), uYears: { value: 0 } },
       vertexShader: `
         uniform float uShip; uniform vec3 uShipPos;
-        uniform float uMagLimit; uniform float uGate; uniform float uYears;
-        attribute float mag; attribute vec3 vel; varying vec3 vColor; varying float vMag; varying float vFade;
+        uniform float uMagLimit; uniform float uGate; uniform float uYears; uniform float uMorph;
+        attribute float mag; attribute vec3 vel; attribute float travelYears;
+        varying vec3 vColor; varying float vMag; varying float vFade;
         void main(){ vColor=color;
           // Time scrub: straight-line extrapolation on the real 6D velocity
           // (forced to 0 in ship view — see animate()). Every other position
           // use below (dSun, dShip, gl_Position) reads this displaced pos.
           vec3 pos = position + vel * (uYears * ${KMS_TO_LYYR_GLSL});
+          // Travel-Time View: blend real position toward direction*travelYears
+          // (angle unchanged, radius becomes ship-years to reach it). Render
+          // only — forced to 0 in ship view; real physics elsewhere always
+          // reads real positions, never this.
+          if (uMorph > 0.0001) {
+            float dReal = max(length(pos), 1e-6);
+            pos *= (1.0 - uMorph) + uMorph * (travelYears / dReal);
+          }
           float dSun = max(length(pos), 0.001);
           float m = mag;
           float mGate = m;
@@ -403,6 +437,7 @@ export default function App() {
       vertexColors: true,
     });
     s.starMat = starMat;
+    s.starGeo = starGeo;
     // Absmag-based variant (far field + Sun marker): m' = M + 5·log10(d_pc/10),
     // with d in ly (10 pc = 32.6156 ly). uAtlasSize > 0 pins atlas-mode size.
     const mkAbsmagMat = (atlasSize) => new THREE.ShaderMaterial({
@@ -410,14 +445,20 @@ export default function App() {
       uniforms: { ...shipUniforms(), uAtlasSize: { value: atlasSize } },
       vertexShader: `
         uniform float uShip; uniform vec3 uShipPos; uniform float uAtlasSize;
-        uniform float uMagLimit; uniform float uGate;
-        attribute float absmag; varying vec3 vColor; varying float vMag; varying float vFade;
+        uniform float uMagLimit; uniform float uGate; uniform float uMorph;
+        attribute float absmag; attribute float travelYears;
+        varying vec3 vColor; varying float vMag; varying float vFade;
         void main(){ vColor=color;
-          float dSun = max(length(position), 0.001);
+          vec3 pos = position;
+          if (uMorph > 0.0001) {
+            float dReal = max(length(pos), 1e-6);
+            pos *= (1.0 - uMorph) + uMorph * (travelYears / dReal);
+          }
+          float dSun = max(length(pos), 0.001);
           float sz; float m; float mGate; float dGate = dSun;
           float fade = 1.0;
           if (uShip > 0.5) {
-            float rawD = distance(position, uShipPos);
+            float rawD = distance(pos, uShipPos);
             float dShip = max(rawD, 0.05);
             m = absmag + ${LOG10x5} * log(dShip / 32.6156);
             sz = clamp(15.5-2.2*m, 1.0, 19.0);
@@ -432,7 +473,7 @@ export default function App() {
           }
           ${SKY_FILTER}
           vMag = m;
-          vec4 mv=modelViewMatrix*vec4(position,1.0);
+          vec4 mv=modelViewMatrix*vec4(pos,1.0);
           gl_PointSize=sz;
           gl_Position=projectionMatrix*mv; }`,
       fragmentShader: STAR_FRAG,
@@ -474,6 +515,7 @@ export default function App() {
         const farPoints = new THREE.Points(geo2, mat2);
         farPoints.frustumCulled = false;
         scene.add(farPoints);
+        s.farGeo = geo2; s.farData = far.data; // for the travel-years recompute effect
         setFarCount(far.count);
       })
       .catch((e) => console.warn("far field unavailable:", e));
@@ -551,6 +593,7 @@ export default function App() {
     sunGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array([0, 0, 0]), 3));
     sunGeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array([1, 0.95, 0.8]), 3));
     sunGeo.setAttribute("absmag", new THREE.BufferAttribute(new Float32Array([4.83]), 1));
+    sunGeo.setAttribute("travelYears", new THREE.BufferAttribute(new Float32Array([0]), 1)); // 0 ly away, always
     const sunMat = mkAbsmagMat(16);
     s.shipMats.push(sunMat);
     const sunPoints = new THREE.Points(sunGeo, sunMat);
@@ -670,6 +713,16 @@ export default function App() {
       background:rgba(232,180,90,0.08);pointer-events:none;display:none;`;
     labelHost.appendChild(boxRectEl);
     const boxVec = new THREE.Vector3();
+    // Travel-Time View morph, applied client-side wherever we need a screen
+    // position that matches what the shader is currently drawing (picking,
+    // box-select, labels). Real (dx,dy,dz) is kept for anything measured —
+    // ly, camDist — only the projected/clicked point gets warped.
+    const morphPos = (x, y, z, travelYears, morph) => {
+      if (morph <= 0.0001) return [x, y, z];
+      const dReal = Math.max(Math.hypot(x, y, z), 1e-6);
+      const f = (1 - morph) + morph * (travelYears / dReal);
+      return [x * f, y * f, z * f];
+    };
     function computeBoxSelect(x1, y1, x2, y2) {
       const rect = el.getBoundingClientRect();
       const left = Math.min(x1, x2) - rect.left, right = Math.max(x1, x2) - rect.left;
@@ -677,12 +730,15 @@ export default function App() {
       if (right - left < 4 || bottom - top < 4) return; // ignore accidental micro-drags
       const matches = [];
       const yrs = (s.effYears ?? 0) * KMS_TO_LYYR; // box select is atlas-only, gated at the call site
+      const morph = s.travelMorph ?? 0;
+      const ty = s.tier1TravelYears;
       for (let i = 0; i < n; i++) {
         const o = i * STRIDE;
         const dx = cat.data[o] + cat.data[o + 3] * yrs;
         const dy = cat.data[o + 1] + cat.data[o + 4] * yrs;
         const dz = cat.data[o + 2] + cat.data[o + 5] * yrs;
-        boxVec.set(dx, dy, dz).project(camera);
+        const [px, py, pz] = ty ? morphPos(dx, dy, dz, ty[i], morph) : [dx, dy, dz];
+        boxVec.set(px, py, pz).project(camera);
         if (boxVec.z > 1) continue;
         const sx = (boxVec.x * 0.5 + 0.5) * rect.width, sy = (-boxVec.y * 0.5 + 0.5) * rect.height;
         if (sx < left || sx > right || sy < top || sy > bottom) continue;
@@ -776,13 +832,15 @@ export default function App() {
       // Time-scrub displacement (the combined epoch — matches whatever the
       // shader is currently drawing) so hover/click stay station-accurate.
       const yrs = (s.effYears ?? 0) * KMS_TO_LYYR;
+      const morph = s.travelMorph ?? 0;
+      const ty = s.tier1TravelYears;
       for (const i of pickable) {
         const o = i * STRIDE;
-        pickVec.set(
-          cat.data[o] + cat.data[o + 3] * yrs,
-          cat.data[o + 1] + cat.data[o + 4] * yrs,
-          cat.data[o + 2] + cat.data[o + 5] * yrs,
-        ).project(camera);
+        const x = cat.data[o] + cat.data[o + 3] * yrs;
+        const y = cat.data[o + 1] + cat.data[o + 4] * yrs;
+        const z = cat.data[o + 2] + cat.data[o + 5] * yrs;
+        const [mx, my, mz] = ty ? morphPos(x, y, z, ty[i], morph) : [x, y, z];
+        pickVec.set(mx, my, mz).project(camera);
         if (pickVec.z > 1) continue;
         const sx = (pickVec.x * 0.5 + 0.5) * rect.width, sy = (-pickVec.y * 0.5 + 0.5) * rect.height;
         const d = Math.hypot(sx - px, sy - py);
@@ -877,11 +935,13 @@ export default function App() {
       // filters apply in both modes now — ship-relative in ship view, Sun-relative in atlas view
       const magLimit = s.skyMode === "eye" ? 6.5 : 99;
       const gate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
+      const morph = shipOn ? 0 : (s.travelMorph ?? 0); // Travel-Time View is atlas-only
       for (const m of s.shipMats) {
         m.uniforms.uShip.value = shipOn;
         m.uniforms.uShipPos.value.copy(s.shipPos);
         m.uniforms.uMagLimit.value = magLimit;
         m.uniforms.uGate.value = gate;
+        m.uniforms.uMorph.value = morph;
       }
       // Manual play/slider drive the BASE epoch whenever no trip is active —
       // works in atlas view, and in ship view before departure (previewing
@@ -972,7 +1032,10 @@ export default function App() {
           star.tier === "nearby" ? dense < 400 :
           dense < 150 && star.ly < dense * 6;
         if (!show) { le.style.display = "none"; return; }
-        projTag(le, labelPos.set(star.x + star.vx * yrs, star.y + star.vy * yrs, star.z + star.vz * yrs));
+        const [lx, lyy, lz] = s.tier1TravelYears
+          ? morphPos(star.x + star.vx * yrs, star.y + star.vy * yrs, star.z + star.vz * yrs, s.tier1TravelYears[star.i], morph)
+          : [star.x + star.vx * yrs, star.y + star.vy * yrs, star.z + star.vz * yrs];
+        projTag(le, labelPos.set(lx, lyy, lz));
         le.style.opacity = star.tier !== "bright" && dense > 150 ? 0.55 : 0.9;
       });
       if (s.mode === "ship" && s.shipPos.lengthSq() < 0.01) {
@@ -981,21 +1044,32 @@ export default function App() {
         projTag(sunLabel, labelPos.set(0, 0, 0));
         sunLabel.style.display = dense < 200000 ? sunLabel.style.display : "none";
       }
-      projTag(sgrLabel, GAL_CENTER);
-      if (dense < 3000) sgrLabel.style.display = "none";
-      projTag(edgeLabel, labelPos.set(GAL_CENTER.x, 0, -52000));
-      if (dense < 18000) edgeLabel.style.display = "none";
-      ringLabels.forEach((rl, i) => {
-        const r = ringRadii[i];
-        if (dense < r * 0.35 || dense > r * 30) { rl.style.display = "none"; return; }
-        projTag(rl, labelPos.set(r * 0.7071, 0, r * 0.7071));
-      });
+      // Galactic landmarks are literal light-year distances, not stars with
+      // a travel-time reading — meaningless (and misleading) once the atlas
+      // radial axis has been re-mapped to ship-years, so hide them in-morph.
+      if (morph > 0.0001) {
+        sgrLabel.style.display = "none";
+        edgeLabel.style.display = "none";
+        ringLabels.forEach((rl) => { rl.style.display = "none"; });
+      } else {
+        projTag(sgrLabel, GAL_CENTER);
+        if (dense < 3000) sgrLabel.style.display = "none";
+        projTag(edgeLabel, labelPos.set(GAL_CENTER.x, 0, -52000));
+        if (dense < 18000) edgeLabel.style.display = "none";
+        ringLabels.forEach((rl, i) => {
+          const r = ringRadii[i];
+          if (dense < r * 0.35 || dense > r * 30) { rl.style.display = "none"; return; }
+          projTag(rl, labelPos.set(r * 0.7071, 0, r * 0.7071));
+        });
+      }
 
-      // halos track selection
+      // halos track selection; tether + Orange Tube are real-distance
+      // measurement overlays that would visually detach from the morphed
+      // points, so all three hide while Travel-Time View is engaged.
       const sel = s.selectedIdx || [];
       [s.haloA, s.haloB].forEach((halo, i) => {
         const idx = sel[i];
-        if (idx == null || s.mode === "ship") { halo.visible = false; return; }
+        if (idx == null || s.mode === "ship" || morph > 0.0001) { halo.visible = false; return; }
         halo.visible = true;
         if (idx === SUN_IDX) halo.position.set(0, 0, 0);
         else {
@@ -1004,6 +1078,11 @@ export default function App() {
         }
         halo.scale.setScalar(s.radius * 0.045);
       });
+      if (morph > 0.0001) {
+        if (s.tether) s.tether.visible = false;
+        if (s.tubeMesh) s.tubeMesh.visible = false;
+        if (s.tubeYearRings) s.tubeYearRings.visible = false;
+      }
 
       setCamDist((prev) => (Math.abs(prev - s.radius) / Math.max(prev, 1) > 0.01 ? s.radius : prev));
       renderer.render(scene, camera);
@@ -1028,6 +1107,22 @@ export default function App() {
       labelHost.innerHTML = "";
     };
   }, [cat, flyTo]);
+
+  // Recompute Travel-Time View's travelYears attribute whenever accel
+  // changes (or the far-field buffer finishes its async load — farCount
+  // flips from 0 to the real count exactly once). ~268k acosh calls total;
+  // fine for a discrete accel-button click, would not be fine per frame.
+  useEffect(() => {
+    const s = stateRef.current;
+    if (!cat || !s.starGeo) return;
+    const t1 = computeTravelYears(cat.data, STRIDE, 0, cat.count, accel);
+    s.starGeo.setAttribute("travelYears", new THREE.BufferAttribute(t1, 1));
+    s.tier1TravelYears = t1; // JS-side mirror for picking/labels — see morphedPos
+    if (s.farGeo && s.farData && farCount > 0) {
+      const t2 = computeTravelYears(s.farData, 5, 0, farCount, accel);
+      s.farGeo.setAttribute("travelYears", new THREE.BufferAttribute(t2, 1));
+    }
+  }, [cat, accel, farCount]);
 
   // keep tether + halos synced with selection (and, in atlas view, the
   // current time-scrub epoch — the tether should track where a star
@@ -1517,6 +1612,29 @@ export default function App() {
           )}
         </div>
 
+        {!shipView && (
+          <div style={{ ...panel, padding: "9px 10px" }}>
+            <div onClick={() => setTravelOpen((v) => !v)}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: travelOpen ? 7 : 0 }}>
+              <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>TRAVEL-TIME VIEW</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{travelOpen ? "▾" : "▸"}</span>
+            </div>
+            {travelOpen && (
+              <>
+                <input type="range" min="0" max="100" step="1" value={Math.round(travelMorph * 100)}
+                  onChange={(e) => setTravelMorph(Number(e.target.value) / 100)}
+                  style={{ width: "100%", accentColor: AMBER, marginTop: 2 }} />
+                <div style={{ ...mono, fontSize: 10, color: "#9fb0cf", marginTop: 4, textAlign: "center" }}>
+                  {travelMorph === 0 ? "real space" : `${Math.round(travelMorph * 100)}% morphed to ship-years`}
+                </div>
+                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
+                  radial distance becomes ship-years to reach at {accel}g brachistochrone — render-only; tether, tube and halos hide while engaged
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
         {selected.length > 0 && (
           <div style={{ ...panel, padding: "9px 10px" }}>
             <div style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em", marginBottom: 7 }}>SELECTION</div>
@@ -1650,7 +1768,7 @@ export default function App() {
 
       {/* Credits */}
       <div style={{ position: "absolute", bottom: 8, right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
-        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time · the mission-brief tube's width is an illustrative function of γ, not a real spatial unit · the rings around it mark whole ship-years — their spacing, not their size, is the point
+        all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time · the mission-brief tube's width is an illustrative function of γ, not a real spatial unit · the rings around it mark whole ship-years — their spacing, not their size, is the point · Travel-Time View remaps radial distance to ship-years at the current accel and never touches real positions used for measurement
       </div>
     </div>
   );

@@ -285,7 +285,7 @@ zoom-dependent core brightness attenuation, click-anything identity cards
 3. Performance — 60 fps in ship view with lines + both star tiers.
 4. Honesty — nothing procedural in the sky; relativistic toggles labeled.
 
-### S5 ⭐ — Seeing Relativity (test 1 shipped 2026-08-06; test 2 next)
+### S5 ⭐ — Seeing Relativity (tests 1 + 2 shipped)
 
 Two live, navigable renders of what the mission brief has only ever reported
 as numbers. Inspired by Overview Effekt's "Time Dilation Visualized" (the
@@ -345,71 +345,61 @@ ICE-colored ring crosses the Sirius tube at roughly its expected f≈0.34
 (year 2 of 4). Credits line updated: "the rings around it mark whole
 ship-years — their spacing, not their size, is the point."
 
-**Test 2 — Travel-Time View.** A third atlas projection: every star's
-position slides along its existing sight-line (angular position from the
-origin never changes — from the origin's own viewpoint the constellations
-look identical) until its radial distance equals ship-years to reach it at
-the current accel. Betelgeuse compresses from 498 ly to single-digit
-ship-years; the observable neighborhood becomes a shallow shell. The morph
-between real-space and travel-time must be continuous, live-draggable, and
-flyable mid-transition (orbit/pan/zoom never lock) — same architecture
-pattern as S4's `years` scrub, not a new interaction mode.
+**Shipped 2026-08-08 — Test 2, Travel-Time View.** A third atlas
+projection: every star's position slides along its existing sight-line
+(angular position from the origin never changes — from the origin's own
+viewpoint the constellations look identical) until its radial distance
+equals ship-years to reach it at the current accel, via a new `uMorph`
+uniform blending `position` toward `direction * travelYears` in both star
+shaders (tier1 and the shared absmag material for tier2 + the Sun marker).
+Applies to **both** tiers — travel-time only needs distance, not velocity,
+so Tier 2's 145,128 far-field stars (no 6D data) participate too, unlike
+S4's time-scrub which is Tier-1-only. `travelYears` is precomputed once per
+accel change (268,146 `journey().shipYears` calls — too expensive per-vertex
+per-frame) and uploaded as a `BufferAttribute`, mirroring `uYears`'s
+displacement pattern.
 
-- Applies to **both** star tiers — travel-time only needs distance, not
-  velocity, so Tier 2's 145,128 far-field stars (no 6D data) participate too,
-  unlike S4's time-scrub which is Tier-1-only.
-- Precompute a `travelYears` attribute per star whenever accel changes
-  (acosh is too expensive to recompute per-vertex, every frame, at 268k
-  points) — a new uniform (`uMorph`) blends `position` toward
-  `direction * travelYears` in the shared star shader, mirroring `uYears`'s
-  displacement pattern.
-- **Honesty, load-bearing**: this is a render-only transform. Real physics
-  (tether, mission brief, closure, closest-approach) always reads real
-  positions regardless of which projection is on screen — never let a
-  star-to-star gap *in this view* be read as a distance anywhere in the UI.
-  Radial distance from the origin is the one meaningful number here (it IS
-  ship-time); label it plainly.
-- Combining Travel-Time View with time-scrub epochs stays deferred (as
-  already noted at S4) — two independent remaps of "where a star is drawn"
-  is a real feature, just not this one.
-- Gate 3: a star's travel-time radius matches the mission brief's own
-  ship-years reading for that same pair, to displayed precision — the view
-  visualizes a number the app already trusts, it doesn't compute a new one.
-- Gate 4: 60 fps sustained through a full morph sweep at both tiers (268k
-  points).
+**Gate 3 verified**: `computeTravelYears` calls the exact same `journey(d,
+accel).shipYears` used to build the mission brief (`brief = journey(sepLy,
+accel)`), with `d` for a single-star selection being the same heliocentric
+distance as `sepLy` — a structural identity, not a coincidence to trust on
+sight. Checked against a real pair, Sol→Sirius (8.6 ly, 1g): mission brief
+reads **4.6 years** ship time / **10.4 years** Earth time; an independent
+Node-side call to `journey(8.6, 1)` returns 4.6076 / 10.3578, matching to
+displayed precision. **Gate 4 verified**: 60 fps sustained through a full
+0→100% slider sweep at whole-galaxy framing (all 268,146 points, both
+tiers) — confirmed both immediately after the sweep and on a 3-second
+settled reading, so the number isn't a rolling-average artifact from the
+preceding camera flight.
 
-**Test 2 — Travel-Time View.** A third atlas projection: every star's
-position slides along its existing sight-line (angular position from the
-origin never changes — from the origin's own viewpoint the constellations
-look identical) until its radial distance equals ship-years to reach it at
-the current accel. Betelgeuse compresses from 548 ly to single-digit
-ship-years; the observable neighborhood becomes a shallow shell. The morph
-between real-space and travel-time must be continuous, live-draggable, and
-flyable mid-transition (orbit/pan/zoom never lock) — same architecture
-pattern as S4's `years` scrub, not a new interaction mode.
+**Honesty, load-bearing.** Render-only transform — real physics (tether,
+mission brief, closure, closest-approach) always reads real positions
+regardless of which projection is on screen. Tether, Orange Tube, and
+selection halos hide while morph is engaged (they're real-distance overlays
+that would visually detach from the warped points); the same applies to the
+galactic-landmark labels (Sgr A*, disk-edge, distance rings) since they're
+literal light-year markers with no ship-years reading of their own.
+Credits line updated: "Travel-Time View remaps radial distance to
+ship-years at the current accel and never touches real positions used for
+measurement." Combining Travel-Time View with time-scrub epochs stays
+deferred (as already noted at S4) — two independent remaps of "where a star
+is drawn" is a real feature, just not this one.
 
-- Applies to **both** star tiers — travel-time only needs distance, not
-  velocity, so Tier 2's 145,128 far-field stars (no 6D data) participate too,
-  unlike S4's time-scrub which is Tier-1-only.
-- Precompute a `travelYears` attribute per star whenever accel changes
-  (acosh is too expensive to recompute per-vertex, every frame, at 268k
-  points) — a new uniform (`uMorph`) blends `position` toward
-  `direction * travelYears` in the shared star shader, mirroring `uYears`'s
-  displacement pattern.
-- **Honesty, load-bearing**: this is a render-only transform. Real physics
-  (tether, mission brief, closure, closest-approach) always reads real
-  positions regardless of which projection is on screen — never let a
-  star-to-star gap *in this view* be read as a distance anywhere in the UI.
-  Radial distance from the origin is the one meaningful number here (it IS
-  ship-time); label it plainly.
-- Combining Travel-Time View with time-scrub epochs stays deferred (as
-  already noted at S4) — two independent remaps of "where a star is drawn"
-  is a real feature, just not this one.
-- Gate 3: a star's travel-time radius matches the mission brief's own
-  ship-years reading for that same pair, to displayed precision — the view
-  visualizes a number the app already trusts, it doesn't compute a new one.
-- Gate 4: 60 fps sustained through a full morph sweep at both tiers (268k
-  points).
+**Bug caught before shipping.** The first `pick()` implementation
+destructured the morphed screen-space point as `const [px, py, pz] = ...`
+inside the hit-test loop — shadowing the outer `px`/`py` (the click's own
+pixel coordinates) used two lines later in `Math.hypot(sx - px, sy - py)`.
+Selection silently stopped working entirely (not just under morph — at
+`uMorph=0` too, since the shadow applies regardless of morph value).
+Caught by a headless hover probe (cursor stayed "grab" everywhere near a
+known star position) before merge, not by eyeballing a screenshot; fixed by
+renaming the inner destructure to `mx, my, mz`.
+
+At whole-galaxy framing with morph at 100%, the visual effect is dramatic
+and correct: the entire 268k-point catalog — real space spanning tens of
+thousands of light-years — collapses into a small central cluster, because
+under constant 1g even a 50,000 ly trip only costs roughly a decade of ship
+time. That collapse *is* the feature.
 
 ### S6 — Layers & Labs (planned; depends on S5's shader-morph pattern)
 

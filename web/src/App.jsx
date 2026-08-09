@@ -161,6 +161,7 @@ export default function App() {
   const [tripPlaying, setTripPlaying] = useState(false);
 
   const [showLines, setShowLines] = useState(true);
+  const [showNames, setShowNames] = useState(true); // star name labels only — landmark tags unaffected
   const [skyMode, setSkyMode] = useState("all");   // all | eye | gate
   const [gateLy, setGateLy] = useState(100);
   const [navOpen, setNavOpen] = useState(true);
@@ -204,6 +205,7 @@ export default function App() {
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
   useEffect(() => { stateRef.current.showLines = showLines; }, [showLines]);
+  useEffect(() => { stateRef.current.showNames = showNames; }, [showNames]);
   useEffect(() => { stateRef.current.skyMode = skyMode; }, [skyMode]);
   useEffect(() => { stateRef.current.gateLy = gateLy; }, [gateLy]);
   useEffect(() => { stateRef.current.boxSelect = boxSelectOn; }, [boxSelectOn]);
@@ -426,6 +428,7 @@ export default function App() {
       vFade = fade;`;
     // 5/ln(10) — GLSL log() is natural log.
     const LOG10x5 = "2.171472409516";
+    const LOG10x5_JS = 2.171472409516; // same constant, JS-side — see skyFade below
     // km/s -> ly/yr for the time-scrub position displacement (1 ly/yr = c).
     const KMS_TO_LYYR_GLSL = String(KMS_TO_LYYR);
     const shipUniforms = () => ({
@@ -883,6 +886,22 @@ export default function App() {
       const f = (1 - morph) + morph * (travelYears / dReal);
       return [x * f, y * f, z * f];
     };
+    // Mirrors the SKY_FILTER GLSL macro above exactly, so a star's label
+    // and clickability agree with how dim its rendered point actually is —
+    // RANGE GATE and NAKED EYE were previously shader-only, so labels kept
+    // reading and stars kept clicking well past where the point had faded.
+    // The gate branch's 0.9 cap floors fade at 0.1 (never literal zero —
+    // deliberate: a point stays a faint presence past the gate, not an
+    // erased hole), so callers should treat "< 0.15" as effectively gone.
+    const smooth = (e0, e1, x) => { const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+    const skyFade = (mag, dSun, dShip, isShip, magLimit, gate) => {
+      const mGate = isShip ? mag + LOG10x5_JS * Math.log(Math.max(dShip, 0.05) / Math.max(dSun, 0.001)) : mag;
+      const dGate = isShip ? dShip : dSun;
+      let fade = 1;
+      if (magLimit < 50) fade *= 1 - smooth(magLimit - 1, magLimit + 0.5, mGate);
+      if (gate > 0) fade *= 1 - 0.9 * smooth(gate * 0.8, gate * 1.3, dGate);
+      return fade;
+    };
     function computeBoxSelect(x1, y1, x2, y2) {
       const rect = el.getBoundingClientRect();
       const left = Math.min(x1, x2) - rect.left, right = Math.max(x1, x2) - rect.left;
@@ -997,11 +1016,17 @@ export default function App() {
       const yrs = (s.effYears ?? 0) * KMS_TO_LYYR;
       const morph = s.travelMorph ?? 0;
       const ty = s.tier1TravelYears;
+      const isShip = s.mode === "ship";
+      const magLimit = s.skyMode === "eye" ? 6.5 : 99;
+      const gate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
       for (const i of pickable) {
         const o = i * STRIDE;
         const x = cat.data[o] + cat.data[o + 3] * yrs;
         const y = cat.data[o + 1] + cat.data[o + 4] * yrs;
         const z = cat.data[o + 2] + cat.data[o + 5] * yrs;
+        const dSun = Math.hypot(x, y, z);
+        const dShip = isShip ? Math.hypot(x - s.shipPos.x, y - s.shipPos.y, z - s.shipPos.z) : 0;
+        if (skyFade(cat.data[o + 6], dSun, dShip, isShip, magLimit, gate) < 0.15) continue;
         const [mx, my, mz] = ty ? morphPos(x, y, z, ty[i], morph) : [x, y, z];
         pickVec.set(mx, my, mz).project(camera);
         if (pickVec.z > 1) continue;
@@ -1197,7 +1222,11 @@ export default function App() {
         offArrow.style.display = "none";
         retTag.style.display = "none";
       }
+      const labelMagLimit = s.skyMode === "eye" ? 6.5 : 99;
+      const labelGate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
+      const labelIsShip = s.mode === "ship";
       labelEls.forEach(({ el: le, star }) => {
+        if (!s.showNames) { le.style.display = "none"; return; } // blunt on/off toggle, independent of the gate
         if (s.mode === "ship" && star.i === s.originIdx) { le.style.display = "none"; return; } // can't label the place you're standing
         const show =
           star.tier === "bright" ? dense < 9000 || star.mag < 0.8 :
@@ -1207,8 +1236,14 @@ export default function App() {
         const [lx, lyy, lz] = s.tier1TravelYears
           ? morphPos(star.x + star.vx * yrs, star.y + star.vy * yrs, star.z + star.vz * yrs, s.tier1TravelYears[star.i], morph)
           : [star.x + star.vx * yrs, star.y + star.vy * yrs, star.z + star.vz * yrs];
+        // RANGE GATE / NAKED EYE: a label shouldn't stay readable once its
+        // point has faded to the gate's floor — see skyFade above.
+        const dSun = Math.hypot(lx, lyy, lz);
+        const dShip = labelIsShip ? Math.hypot(lx - s.shipPos.x, lyy - s.shipPos.y, lz - s.shipPos.z) : 0;
+        const fade = skyFade(star.mag, dSun, dShip, labelIsShip, labelMagLimit, labelGate);
+        if (fade < 0.15) { le.style.display = "none"; return; }
         projTag(le, labelPos.set(lx, lyy, lz));
-        le.style.opacity = star.tier !== "bright" && dense > 150 ? 0.55 : 0.9;
+        le.style.opacity = (star.tier !== "bright" && dense > 150 ? 0.55 : 0.9) * fade;
       });
       if (s.mode === "ship" && s.shipPos.lengthSq() < 0.01) {
         sunLabel.style.display = "none"; // can't label the place you're standing
@@ -1759,6 +1794,12 @@ export default function App() {
                     background: showLines ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
                     border: `1px solid rgba(143,165,216,${showLines ? 0.6 : 0.25})`, color: "#aebde0" }}>
                   lines {showLines ? "on" : "off"}
+                </button>
+                <button onClick={() => setShowNames(!showNames)}
+                  style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                    background: showNames ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
+                    border: `1px solid rgba(143,165,216,${showNames ? 0.6 : 0.25})`, color: "#aebde0" }}>
+                  names {showNames ? "on" : "off"}
                 </button>
                 {[["all", "ALL"], ["eye", "NAKED EYE"], ["gate", "RANGE GATE"]].map(([k, label]) => (
                   <button key={k} onClick={() => setSkyMode(k)}

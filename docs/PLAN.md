@@ -457,6 +457,29 @@ console/page errors across pick → configure → release → scrub → re-relea
 This is a percolation laboratory wearing a sci-fi costume — both identities
 stay visible, neither is hidden behind the other.
 
+**Fixed 2026-08-09 — RANGE GATE / NAKED EYE now actually restrict labels
+and clicking (user-caught, with a screenshot).** Both filters have applied
+to the rendered star point since S2 via the shader's `SKY_FILTER` macro,
+but two other channels that display a star never looked at them: HTML
+labels and `pick()` (click/hover selection) read `skyMode`/`gateLy` not at
+all, so a star faded to near-invisible by the gate was still fully named
+and fully clickable — at a 10 ly gate, dozens of thousand-ly-away names
+were still on screen. Fixed with a shared `skyFade()` JS helper that
+mirrors `SKY_FILTER`'s math exactly (same smoothstep curve, same
+`LOG10x5` constant, cross-referenced in comments so the two can't drift),
+used by both the labels loop and `pick()`. The gate's shader curve floors
+fade at 0.1 (deliberate — a point stays a faint presence past the gate,
+not an erased hole) so labels/picking snap off at `fade < 0.15`, just above
+that floor, rather than only at literal zero. `computeBoxSelect` stays
+deliberately exempt — its own tooltip promises "every star in it, even
+faint ones." Also added a `names on/off` toggle (VIEW panel, same pattern
+as the existing `lines on/off`) for star labels specifically, independent
+of the gate — landmark labels (Sun/Sgr A*/disk edge/rings) are unaffected.
+Verified: at a 10 ly gate, far names (Vega, Arcturus) are gone and no
+longer clickable while in-gate stars (Sirius, at the transition zone) stay
+fully labeled and pickable; box-select still lists gated-out stars as
+designed; behavior confirmed consistent in both atlas and ship view.
+
 **Universes.** A curated-JSON catalog of sci-fi settings mapped onto real
 stars: author/work, star mappings (real index ↔ fictional name, each with a
 canon citation — omit or flag any mapping that can't be sourced, never guess

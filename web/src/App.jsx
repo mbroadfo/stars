@@ -3,6 +3,7 @@ import * as THREE from "three";
 import { loadCatalog, loadFarField, getStar, STRIDE, CI_SENTINEL } from "./lib/catalog.js";
 import { journey, brachAt, closureRate, separationLy, advanceStar, closestApproach, fmt, fmtYears, KM_PER_LY, C_KMS, G_LY_YR2 } from "./lib/physics.js";
 import { ciToRgb, rgbToCss } from "./lib/color.js";
+import { buildNeighborGrid, runOutbreak, infectedCountAtEpoch } from "./lib/infection.js";
 
 /* ============================================================
    STELLAR NEIGHBORHOOD — a navigable atlas (S2)
@@ -21,6 +22,7 @@ const getStarOrSun = (cat, idx) => (idx === SUN_IDX ? sunStar() : getStar(cat, i
 const KMS_TO_LYYR = 1 / C_KMS; // km/s -> ly/yr, for time-scrub position displacement
 const YEARS_PER_SEC = 2500;    // playback rate: a full ±100k sweep takes 80s
 const YEARS_MAX = 100000;
+const INFECTION_YEARS_PER_SEC = 20; // Infection Lab epoch scrub pacing — a ~100 yr run plays in ~5s
 
 // The Orange Tube (S5 test 1): a swept-circle mesh along the straight line
 // from `from` to `to`, radius at each point an ILLUSTRATIVE function of
@@ -183,6 +185,22 @@ export default function App() {
   const [travelMorph, setTravelMorph] = useState(0); // 0 = real space, 1 = fully morphed
   const [travelOpen, setTravelOpen] = useState(true);
 
+  // The Infection Lab (S6) — a Project Hail Mary-style astrophage
+  // percolation sim over real Tier 1 positions via a spatial neighbor grid
+  // (built once per catalog load). Epoch scrub reuses ScrubControl, the
+  // same mechanic as the TIME panel, on its own independent axis — see
+  // PLAN.md: "reuse S4's time-scrub slider verbatim... rather than
+  // building a second timeline control from scratch."
+  const [patientZero, setPatientZero] = useState(null);
+  const [hopRangeLy, setHopRangeLy] = useState(8);       // ly — canonical astrophage range
+  const [transmitChance, setTransmitChance] = useState(0.7);
+  const [incubationYears, setIncubationYears] = useState(1);
+  const [infectionOpen, setInfectionOpen] = useState(true);
+  const [infectionPickArmed, setInfectionPickArmed] = useState(false);
+  const [infectionSummary, setInfectionSummary] = useState(null); // {totalInfected,maxGeneration,maxEpoch,percolated}
+  const [infectionEpoch, setInfectionEpoch] = useState(0);
+  const [infectionEpochPlaying, setInfectionEpochPlaying] = useState(false);
+
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
   useEffect(() => { stateRef.current.showLines = showLines; }, [showLines]);
@@ -191,6 +209,12 @@ export default function App() {
   useEffect(() => { stateRef.current.boxSelect = boxSelectOn; }, [boxSelectOn]);
   useEffect(() => { stateRef.current.years = years; }, [years]);
   useEffect(() => { stateRef.current.travelMorph = travelMorph; }, [travelMorph]);
+  useEffect(() => { stateRef.current.patientZero = patientZero; }, [patientZero]);
+  useEffect(() => { stateRef.current.hopRangeLy = hopRangeLy; }, [hopRangeLy]);
+  useEffect(() => { stateRef.current.transmitChance = transmitChance; }, [transmitChance]);
+  useEffect(() => { stateRef.current.incubationYears = incubationYears; }, [incubationYears]);
+  useEffect(() => { stateRef.current.infectionPickArmed = infectionPickArmed; }, [infectionPickArmed]);
+  useEffect(() => { stateRef.current.infectionEpoch = infectionEpoch; }, [infectionEpoch]);
 
   // shared by 3D click-picking and the box-select results list: fills the
   // next empty slot, or replaces the older slot once both are full
@@ -344,6 +368,26 @@ export default function App() {
       if (p && s.years >= YEARS_MAX) s.years = -YEARS_MAX; // replay the full sweep
       s.yearsPlaying = p; setYearsPlaying(p);
       if (p) setYears(s.years);
+    };
+
+    // Infection Lab: patient-zero pick (search box or click-on-map) and the
+    // epoch scrub's imperative setters — same shape as setYears/
+    // setYearsPlaying above, on the independent infection-epoch axis.
+    s.setPatientZero = (idx) => {
+      s.infectionPickArmed = false; setInfectionPickArmed(false);
+      setPatientZero(idx);
+    };
+    s.setInfectionEpoch = (e) => {
+      const max = s.infectionRun?.maxEpoch ?? 0;
+      s.infectionEpoch = Math.max(0, Math.min(max, e));
+      s.infectionEpochPlaying = false; setInfectionEpochPlaying(false);
+      setInfectionEpoch(s.infectionEpoch);
+    };
+    s.setInfectionEpochPlaying = (p) => {
+      const max = s.infectionRun?.maxEpoch ?? 0;
+      if (p && s.infectionEpoch >= max) s.infectionEpoch = 0; // replay from patient zero
+      s.infectionEpochPlaying = p; setInfectionEpochPlaying(p);
+      if (p) setInfectionEpoch(s.infectionEpoch);
     };
 
     // --- Star field: one draw call over the whole Tier 1 buffer ---
@@ -665,6 +709,122 @@ export default function App() {
     };
     s.haloA = mkHalo(AMBER); s.haloB = mkHalo(AMBER);
 
+    // --- The Infection Lab (S6) overlay: infected-star points + cascade-
+    // tree edges (parent -> child transmission), revealed progressively as
+    // the epoch scrub advances via a uEpoch discard — the same reveal
+    // pattern as uYears/uMorph elsewhere, applied to a brand-new geometry
+    // instead of the shared star field (keeps the already-delicate shared
+    // star shaders untouched). Geometry starts empty; releaseOutbreak()
+    // below fills it in on each Release click.
+    const infMat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      uniforms: { uEpoch: { value: 0 } },
+      vertexShader: `
+        uniform float uEpoch;
+        attribute float epoch;
+        varying float vAge; varying float vFade;
+        void main() {
+          vFade = epoch <= uEpoch ? 1.0 : 0.0;
+          vAge = clamp((uEpoch - epoch) / 8.0, 0.0, 1.0); // 0 = just infected, 1 = long infected
+          gl_PointSize = mix(14.0, 6.0, vAge);
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        varying float vAge; varying float vFade;
+        void main() {
+          vec2 uv = gl_PointCoord - 0.5;
+          float core = smoothstep(0.5, 0.05, length(uv));
+          float a = core * vFade;
+          if (a < 0.02) discard;
+          vec3 hot = vec3(1.0, 0.95, 0.85);
+          vec3 cool = vec3(0.85, 0.15, 0.1);
+          gl_FragColor = vec4(mix(hot, cool, vAge), a * (1.0 - 0.4 * vAge));
+        }`,
+    });
+    const infGeo = new THREE.BufferGeometry();
+    const infPoints = new THREE.Points(infGeo, infMat);
+    infPoints.frustumCulled = false;
+    infPoints.visible = false;
+    scene.add(infPoints);
+    s.infectionPoints = infPoints; s.infectionMat = infMat;
+
+    const infLineMat = new THREE.ShaderMaterial({
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+      uniforms: { uEpoch: { value: 0 } },
+      vertexShader: `
+        uniform float uEpoch;
+        attribute float epoch;
+        varying float vShow;
+        void main() {
+          vShow = epoch <= uEpoch ? 1.0 : 0.0;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        varying float vShow;
+        void main() {
+          if (vShow < 0.5) discard;
+          gl_FragColor = vec4(1.0, 0.35, 0.22, 0.4);
+        }`,
+    });
+    const infLineGeo = new THREE.BufferGeometry();
+    const infLines = new THREE.LineSegments(infLineGeo, infLineMat);
+    infLines.frustumCulled = false;
+    infLines.visible = false;
+    scene.add(infLines);
+    s.infectionLines = infLines; s.infectionLineMat = infLineMat;
+
+    // Runs the stochastic cascade fresh (re-clicking Release with identical
+    // params gives a different outcome — that's the whole point of testing
+    // the "would it consume the galaxy" claim rather than animating it) and
+    // uploads both overlay geometries. Reads params from the s.* mirrors,
+    // not React state directly, so it always sees the latest slider values
+    // even though this closure is only created once per catalog load.
+    s.releaseOutbreak = () => {
+      const grid = s.infectionGrid;
+      const pz = s.patientZero;
+      if (!cat || !grid || pz == null) return;
+      const run = runOutbreak({
+        cat, grid, patientZero: pz,
+        hopRangeLy: s.hopRangeLy ?? 8,
+        transmitChance: s.transmitChance ?? 0.7,
+        incubationYears: s.incubationYears ?? 1,
+      });
+      s.infectionRun = run;
+      s.infectionEpoch = 0; setInfectionEpoch(0);
+      s.infectionEpochPlaying = false; setInfectionEpochPlaying(false);
+      setInfectionSummary({
+        totalInfected: run.totalInfected, maxGeneration: run.maxGeneration,
+        maxEpoch: run.maxEpoch, percolated: run.percolated,
+      });
+
+      const n = run.order.length;
+      const posArr = new Float32Array(n * 3);
+      const epochArr = new Float32Array(n);
+      for (let k = 0; k < n; k++) {
+        const idx = run.order[k];
+        const o = idx * STRIDE;
+        posArr[k * 3] = cat.data[o]; posArr[k * 3 + 1] = cat.data[o + 1]; posArr[k * 3 + 2] = cat.data[o + 2];
+        epochArr[k] = run.generation.get(idx) * run.incubationYears;
+      }
+      infGeo.setAttribute("position", new THREE.BufferAttribute(posArr, 3));
+      infGeo.setAttribute("epoch", new THREE.BufferAttribute(epochArr, 1));
+
+      const edgeCount = run.parent.size;
+      const linePos = new Float32Array(edgeCount * 2 * 3);
+      const lineEpoch = new Float32Array(edgeCount * 2);
+      let e = 0;
+      for (const [childIdx, parentIdx] of run.parent.entries()) {
+        const co = childIdx * STRIDE, po = parentIdx * STRIDE;
+        linePos[e * 6] = cat.data[po]; linePos[e * 6 + 1] = cat.data[po + 1]; linePos[e * 6 + 2] = cat.data[po + 2];
+        linePos[e * 6 + 3] = cat.data[co]; linePos[e * 6 + 4] = cat.data[co + 1]; linePos[e * 6 + 5] = cat.data[co + 2];
+        const childEpoch = run.generation.get(childIdx) * run.incubationYears;
+        lineEpoch[e * 2] = childEpoch; lineEpoch[e * 2 + 1] = childEpoch;
+        e++;
+      }
+      infLineGeo.setAttribute("position", new THREE.BufferAttribute(linePos, 3));
+      infLineGeo.setAttribute("epoch", new THREE.BufferAttribute(lineEpoch, 1));
+    };
+
     // --- Labels (HTML overlay) — named stars, tiered by prominence ---
     const labelHost = labelsRef.current;
     const labelStars = [...cat.nameByIndex.keys()].map(starAt).map((st) => ({
@@ -791,7 +951,10 @@ export default function App() {
     const onUp = (e) => {
       if (drag && moved < 6 && drag.btn === 0) {
         const hit = pick(e.clientX, e.clientY);
-        if (hit != null) selectStar(hit);
+        if (hit != null) {
+          if (s.infectionPickArmed) s.setPatientZero?.(hit);
+          else selectStar(hit);
+        }
       } else if (drag && s.boxSelect && s.mode !== "ship" && drag.btn === 0 && !drag.shift) {
         computeBoxSelect(drag.startX, drag.startY, e.clientX, e.clientY);
       }
@@ -953,6 +1116,15 @@ export default function App() {
         s.yearsUiT = (s.yearsUiT ?? 0) + dt;
         if (s.yearsUiT > 0.15) { s.yearsUiT = 0; setYears(s.years); }
       }
+      // Infection Lab epoch playback — independent axis from the real
+      // calendar time-scrub above, same throttled-UI-mirror mechanic.
+      if (s.infectionEpochPlaying) {
+        const maxEpoch = s.infectionRun?.maxEpoch ?? 0;
+        s.infectionEpoch = Math.min(maxEpoch, (s.infectionEpoch ?? 0) + dt * INFECTION_YEARS_PER_SEC);
+        if (s.infectionEpoch >= maxEpoch) { s.infectionEpochPlaying = false; setInfectionEpochPlaying(false); }
+        s.infEpochUiT = (s.infEpochUiT ?? 0) + dt;
+        if (s.infEpochUiT > 0.15) { s.infEpochUiT = 0; setInfectionEpoch(s.infectionEpoch); }
+      }
       // Combined epoch: base scrub epoch + Earth-time elapsed on any active
       // trip. Single time value read everywhere a position matters — the
       // shader, picking, labels, halos, the reticle, the mission brief.
@@ -1084,6 +1256,18 @@ export default function App() {
         if (s.tubeYearRings) s.tubeYearRings.visible = false;
       }
 
+      // Infection Lab overlay — atlas-only (like the Tube/Travel-Time View)
+      // and hidden while Travel-Time View is morphed (its cascade edges
+      // aren't warped along with the star field, so showing both at once
+      // would visibly detach the wave from the points it connects).
+      const infActive = !!s.infectionRun && s.mode !== "ship" && morph <= 0.0001;
+      if (s.infectionPoints) s.infectionPoints.visible = infActive;
+      if (s.infectionLines) s.infectionLines.visible = infActive;
+      if (infActive) {
+        s.infectionMat.uniforms.uEpoch.value = s.infectionEpoch ?? 0;
+        s.infectionLineMat.uniforms.uEpoch.value = s.infectionEpoch ?? 0;
+      }
+
       setCamDist((prev) => (Math.abs(prev - s.radius) / Math.max(prev, 1) > 0.01 ? s.radius : prev));
       renderer.render(scene, camera);
     };
@@ -1123,6 +1307,15 @@ export default function App() {
       s.farGeo.setAttribute("travelYears", new THREE.BufferAttribute(t2, 1));
     }
   }, [cat, accel, farCount]);
+
+  // Build the Infection Lab's spatial neighbor grid once per catalog load
+  // (~123k cheap insertions into a Map) — cell size is fixed, so it never
+  // needs rebuilding when the hop-range slider moves; see lib/infection.js.
+  useEffect(() => {
+    const s = stateRef.current;
+    if (!cat) return;
+    s.infectionGrid = buildNeighborGrid(cat);
+  }, [cat]);
 
   // keep tether + halos synced with selection (and, in atlas view, the
   // current time-scrub epoch — the tether should track where a star
@@ -1217,6 +1410,18 @@ export default function App() {
   }
   const brief = sepLy ? journey(sepLy, accel) : null;
   const voyYears = sepLy ? (sepLy * KM_PER_LY) / 17 / 3.15576e7 : null;
+
+  // Infection Lab: infected-so-far / current generation at the epoch scrub's
+  // current position. Reads the imperative run directly — safe because
+  // s.infectionRun is only ever (re)written synchronously inside
+  // releaseOutbreak(), which happens-before the setInfectionSummary/
+  // setInfectionEpoch calls that are what actually trigger this re-render.
+  const infectionRun = stateRef.current.infectionRun;
+  const infectedNow = infectionRun ? infectedCountAtEpoch(infectionRun, infectionEpoch) : 0;
+  const infectionGenNow = infectionRun
+    ? Math.min(infectionRun.maxGeneration, Math.floor(infectionEpoch / infectionRun.incubationYears))
+    : 0;
+  const patientZeroName = cat && patientZero != null ? getStarOrSun(cat, patientZero).name ?? "unnamed star" : null;
 
   const hoveredStar = cat && hovered != null ? advanceStar(getStar(cat, hovered), effectiveYears) : null;
 
@@ -1328,6 +1533,36 @@ export default function App() {
       </div>
     );
   };
+
+  // Shared slider + play/pause + preset-buttons control, extracted so the
+  // Infection Lab's epoch scrub can reuse the exact TIME-panel mechanic
+  // (per the S6 brief: "reuse S4's time-scrub slider verbatim... rather
+  // than building a second timeline control from scratch") without the two
+  // axes (real calendar years vs. cumulative infection epoch) sharing state.
+  const ScrubControl = ({ value, min, max, step = 1, playing, onChange, onTogglePlay, presets, note }) => (
+    <>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        style={{ width: "100%", accentColor: AMBER, marginTop: 6 }} />
+      <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
+        <button onClick={onTogglePlay}
+          style={{ ...mono, fontSize: 11, width: 26, padding: "3px 0", background: "rgba(232,180,90,0.18)", border: "1px solid rgba(232,180,90,0.6)", color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
+          {playing ? "⏸" : "▶"}
+        </button>
+        {presets.map(([label, v]) => (
+          <button key={label} onClick={() => onChange(v)}
+            style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
+              background: value === v ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
+              border: `1px solid rgba(232,180,90,${value === v ? 0.7 : 0.25})`, color: "#e8c88a" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {note && (
+        <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>{note}</div>
+      )}
+    </>
+  );
 
   const Section = ({ k, title, children }) => (
     <div style={{ borderTop: "1px solid rgba(232,180,90,0.16)" }}>
@@ -1585,28 +1820,14 @@ export default function App() {
                   advancing with Earth-time · departed at {years === 0 ? "NOW" : `T${years > 0 ? "+" : "−"}${fmt(Math.abs(years), 0)} yr`}
                 </div>
               ) : (
-                <>
-                  <input type="range" min={-YEARS_MAX} max={YEARS_MAX} step="100" value={years}
-                    onChange={(e) => stateRef.current.setYears?.(Number(e.target.value))}
-                    style={{ width: "100%", accentColor: AMBER, marginTop: 6 }} />
-                  <div style={{ display: "flex", gap: 5, marginTop: 6, flexWrap: "wrap" }}>
-                    <button onClick={() => stateRef.current.setYearsPlaying?.(!yearsPlaying)}
-                      style={{ ...mono, fontSize: 11, width: 26, padding: "3px 0", background: "rgba(232,180,90,0.18)", border: "1px solid rgba(232,180,90,0.6)", color: "#f0d9a8", borderRadius: 4, cursor: "pointer" }}>
-                      {yearsPlaying ? "⏸" : "▶"}
-                    </button>
-                    {[["now", 0], ["−100k", -YEARS_MAX], ["+100k", YEARS_MAX]].map(([label, y]) => (
-                      <button key={label} onClick={() => stateRef.current.setYears?.(y)}
-                        style={{ ...mono, fontSize: 10, padding: "3px 8px", borderRadius: 4, cursor: "pointer",
-                          background: years === y ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
-                          border: `1px solid rgba(232,180,90,${years === y ? 0.7 : 0.25})`, color: "#e8c88a" }}>
-                        {label}
-                      </button>
-                    ))}
-                  </div>
-                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
-                    stars advance on real 6D velocities{shipView ? " · this is your departure epoch" : ""}
-                  </div>
-                </>
+                <ScrubControl
+                  value={years} min={-YEARS_MAX} max={YEARS_MAX} step={100}
+                  playing={yearsPlaying}
+                  onChange={(y) => stateRef.current.setYears?.(y)}
+                  onTogglePlay={() => stateRef.current.setYearsPlaying?.(!yearsPlaying)}
+                  presets={[["now", 0], ["−100k", -YEARS_MAX], ["+100k", YEARS_MAX]]}
+                  note={`stars advance on real 6D velocities${shipView ? " · this is your departure epoch" : ""}`}
+                />
               )}
             </>
           )}
@@ -1629,6 +1850,97 @@ export default function App() {
                 </div>
                 <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
                   radial distance becomes ship-years to reach at {accel}g brachistochrone — render-only; tether, tube and halos hide while engaged
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {!shipView && (
+          <div style={{ ...panel, padding: "9px 10px" }}>
+            <div onClick={() => setInfectionOpen((v) => !v)}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: infectionOpen ? 7 : 0 }}>
+              <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>INFECTION LAB</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{infectionOpen ? "▾" : "▸"}</span>
+            </div>
+            {infectionOpen && (
+              <>
+                <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginBottom: 3 }}>patient zero</div>
+                <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
+                  <div style={{ flex: 1 }}>
+                    <StarSearch placeholder={patientZeroName ?? "search stars…"} onPick={(idx) => stateRef.current.setPatientZero?.(idx)} allowSun={false} />
+                  </div>
+                  <button onClick={() => setInfectionPickArmed((v) => !v)} title="click a star on the map"
+                    style={{ ...mono, fontSize: 10, padding: "5px 8px", borderRadius: 4, cursor: "pointer", marginTop: 6,
+                      background: infectionPickArmed ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
+                      border: `1px solid rgba(232,180,90,${infectionPickArmed ? 0.7 : 0.3})`, color: "#e8c88a" }}>
+                    ⌖
+                  </button>
+                </div>
+                {infectionPickArmed && (
+                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 4 }}>click any star to set patient zero</div>
+                )}
+                {patientZeroName && (
+                  <div style={{ ...mono, fontSize: 11, color: "#f0d9a8", marginTop: 5 }}>● {patientZeroName}</div>
+                )}
+
+                <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginTop: 10 }}>
+                  hop range <span style={{ float: "right", color: "#dfe6f2" }}>{hopRangeLy} ly</span>
+                </div>
+                <input type="range" min="1" max="20" step="0.5" value={hopRangeLy}
+                  onChange={(e) => setHopRangeLy(Number(e.target.value))}
+                  style={{ width: "100%", accentColor: AMBER, marginTop: 2 }} />
+
+                <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginTop: 8 }}>
+                  transmission chance <span style={{ float: "right", color: "#dfe6f2" }}>{Math.round(transmitChance * 100)}%</span>
+                </div>
+                <input type="range" min="0" max="1" step="0.05" value={transmitChance}
+                  onChange={(e) => setTransmitChance(Number(e.target.value))}
+                  style={{ width: "100%", accentColor: AMBER, marginTop: 2 }} />
+
+                <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginTop: 8 }}>
+                  incubation <span style={{ float: "right", color: "#dfe6f2" }}>{incubationYears} yr/hop</span>
+                </div>
+                <input type="range" min="0.1" max="5" step="0.1" value={incubationYears}
+                  onChange={(e) => setIncubationYears(Number(e.target.value))}
+                  style={{ width: "100%", accentColor: AMBER, marginTop: 2 }} />
+
+                <button onClick={() => stateRef.current.releaseOutbreak?.()} disabled={patientZero == null}
+                  style={{ ...mono, fontSize: 11, width: "100%", padding: "6px 0", marginTop: 10, borderRadius: 4,
+                    cursor: patientZero == null ? "default" : "pointer",
+                    background: patientZero == null ? "rgba(255,255,255,0.04)" : "rgba(232,180,90,0.22)",
+                    border: `1px solid rgba(232,180,90,${patientZero == null ? 0.15 : 0.7})`,
+                    color: patientZero == null ? "#4a5570" : "#f0d9a8" }}>
+                  {infectionSummary ? "release again" : "release"}
+                </button>
+
+                {infectionSummary && (
+                  <>
+                    <div style={{ ...mono, fontSize: 12, lineHeight: 1.9, color: "#c3cfe6", marginTop: 10 }}>
+                      <div>infected (so far) <span style={{ float: "right", color: "#fff" }}>
+                        {infectedNow.toLocaleString()} <span style={{ color: "#8fa0c0" }}>({fmt((infectedNow / cat.count) * 100, 1)}%)</span>
+                      </span></div>
+                      <div>generation <span style={{ float: "right", color: "#fff" }}>{infectionGenNow} / {infectionSummary.maxGeneration}</span></div>
+                      <div style={{ borderTop: "1px solid rgba(232,180,90,0.2)", marginTop: 4, paddingTop: 4 }}>
+                        final: <span style={{ color: infectionSummary.percolated ? "#e8a07a" : "#8fd3ff" }}>
+                          {infectionSummary.percolated ? "percolated" : "died out"}
+                        </span> — {infectionSummary.totalInfected.toLocaleString()} of {cat.count.toLocaleString()} ({fmt((infectionSummary.totalInfected / cat.count) * 100, 2)}%)
+                      </div>
+                    </div>
+                    <div style={{ marginTop: 8 }}>
+                      <ScrubControl
+                        value={infectionEpoch} min={0} max={Math.max(0.001, infectionSummary.maxEpoch)} step={infectionSummary.maxEpoch / 200 || 1}
+                        playing={infectionEpochPlaying}
+                        onChange={(e) => stateRef.current.setInfectionEpoch?.(e)}
+                        onTogglePlay={() => stateRef.current.setInfectionEpochPlaying?.(!infectionEpochPlaying)}
+                        presets={[["start", 0], ["end", infectionSummary.maxEpoch]]}
+                        note="scrubs the wave, not the calendar — an independent epoch from the TIME panel above"
+                      />
+                    </div>
+                  </>
+                )}
+                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 8 }}>
+                  8 ly / 70% is the film's own astrophage claim — test whether it actually consumes the galaxy, or fizzles. Re-releasing with the same settings can end differently — that's the stochastic point.
                 </div>
               </>
             )}

@@ -401,29 +401,61 @@ thousands of light-years — collapses into a small central cluster, because
 under constant 1g even a 50,000 ly trip only costs roughly a decade of ship
 time. That collapse *is* the feature.
 
-### S6 — Layers & Labs (planned; depends on S5's shader-morph pattern)
+### S6 — Layers & Labs (Infection Lab shipped; Universes planned)
 
-One new piece of shared infrastructure unlocks two features: **a spatial
-neighbor index over Tier 1** ("which stars lie within R ly of X"). Proposed:
-a uniform 3D grid (cell size ≈ typical query radius), built once at load —
-not a k-d tree/octree (over-engineered at 123k stars; that's S7's problem at
-2.5M) and not brute-force-per-query either (fine per-hop, but a
-multi-thousand-hop percolation run would add up) — a grid is the right size
-tool for this job.
+Shared infrastructure: **a spatial neighbor index over Tier 1** ("which
+stars lie within R ly of X"). Built as a uniform 3D grid, fixed cell size
+8 ly (the canonical astrophage range — doesn't need rebuilding when the hop-
+range slider moves, only the number of cells scanned per query changes),
+built once at catalog load in `lib/infection.js`'s `buildNeighborGrid`. Not
+a k-d tree/octree (over-engineered at 123k stars; that's S7's problem at
+2.5M) and not brute-force-per-query either — a grid is the right size tool
+for this job.
 
-**The Infection Lab.** *Project Hail Mary*'s astrophage spreads star-to-star
-with an 8 ly range; the source video *claims* that range would consume the
-galaxy without ever testing it. Let the user test it instead of animating the
-claim. Controls: hop range (ly), transmission chance per hop (so spread can
-stochastically fizzle — intentionally non-deterministic, no seeded RNG
-needed, "different outcome each run" is the point), incubation time per hop,
-patient zero (search or click any real star). BFS wave propagation assigns
-each newly-infected star an infection epoch (cumulative incubation delay) —
-**reuse S4's time-scrub slider verbatim** to scrub through and watch the
-infection actually spread star-by-star, rather than building a second
-timeline control from scratch. Live stats: infected count, %, generation,
-percolated-or-died. This is a percolation laboratory wearing a sci-fi
-costume — both identities stay visible, neither is hidden behind the other.
+**Shipped 2026-08-09 — The Infection Lab.** *Project Hail Mary*'s astrophage
+spreads star-to-star with an 8 ly range; the source video *claims* that
+range would consume the galaxy without ever testing it. Built to let the
+user test it instead of animating the claim. Controls: hop range (ly),
+transmission chance per hop, incubation time per hop, patient zero (search
+or click any real star, via `⌖` pick-on-map armed against the existing
+`pick()`/`onUp` flow). An independent-cascade BFS (`runOutbreak` in
+`lib/infection.js`) assigns each newly-infected star a generation (shortest
+infection-hop-count) and epoch (`generation × incubationYears`, exact since
+incubation isn't itself randomized); a failed transmission roll doesn't
+permanently immunize a star — a *different* already-infected neighbor can
+still reach it later on its own turn, which falls out of "skip only if
+already infected" with no extra bookkeeping. **The TIME panel's slider +
+play/pause + presets were extracted into a shared `ScrubControl` component**
+and reused verbatim for the epoch scrub, on its own independent axis (its
+own `s.infectionEpoch`/`infectionEpochPlaying`, not `s.years`) — exactly the
+"rather than building a second timeline control from scratch" instruction,
+without the two axes' meanings colliding. Live stats: infected count/%,
+generation, percolated-or-died (first-pass heuristic: >1% of Tier 1 infected
+reads as percolated).
+
+Visualization is a dedicated overlay (`infectionPoints` / `infectionLines`,
+two new `THREE.Points`/`LineSegments` objects, not the shared star shaders)
+with a `uEpoch`-discard reveal — the exact same pattern as `uYears`/`uMorph`
+elsewhere — so cascade points brighten in white-hot on infection and cool to
+red with age, and transmission edges draw in as the epoch scrub passes them.
+**Gates verified**: stochasticity confirmed real, not cosmetic — 10 runs
+from Sirius at the canonical 8 ly/70%/1 yr settings ranged 1–14 stars
+infected (a genuinely sparse neighborhood: Sirius has exactly 3 Tier‑1
+neighbors within 8 ly — Procyon, Ran, Kapteyn's Star); a 25-star sample of
+named patient zeros at those same canonical settings **never once
+percolated** — largest observed outbreak was 6 stars (0.005% of the
+catalog), a real empirical answer (with the caveat that the sample was
+drawn from named/prominent stars, not a uniform draw over all of Tier 1) to
+a claim the film never tested. 60 fps sustained through release + full
+epoch playback at a large cascade (Sirius, 20 ly/95%, 15,130 stars
+infected/12.3% — percolated) at whole-neighborhood framing, verified both
+immediately and after a multi-second settle (the initial ~18 fps reading
+right after a large Release is a one-frame geometry-upload transient, same
+class as the travel-morph transient in the S5 writeup, not a sustained
+cost). Ship view hides the panel and both overlay objects; confirmed no
+console/page errors across pick → configure → release → scrub → re-release.
+This is a percolation laboratory wearing a sci-fi costume — both identities
+stay visible, neither is hidden behind the other.
 
 **Universes.** A curated-JSON catalog of sci-fi settings mapped onto real
 stars: author/work, star mappings (real index ↔ fictional name, each with a

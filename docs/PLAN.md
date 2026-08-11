@@ -514,6 +514,33 @@ Kentaurus/Toliman, the Sun, Groombridge 34), with a mag-8.1 star still
 present among them, confirming the magnitude exemption held while the
 distance cutoff engaged.
 
+**Fixed 2026-08-11 — search dropdowns gained keyboard navigation, and the
+Sun is now a valid Infection Lab patient zero (both user-caught: "I can
+type sun or tau cet into the search box for the infection lab but can't
+select it or arrow to it").** `StarSearch` had zero keyboard handling —
+mouse-click selection worked (verified in the PR above), but arrow keys
+just moved the text cursor and Enter did nothing. Added a `highlighted`
+index shared between mouse-hover and keyboard focus: ArrowUp/ArrowDown
+move it (clamped, not wrapped), Enter picks the highlighted row or falls
+back to the top result if none is highlighted yet, Escape closes. Second,
+the Infection Lab's search box had `allowSun={false}` (an assumption that
+astrophage wouldn't realistically start at the Sun) — user's call: allow
+it. That required more than flipping the flag: `runOutbreak`'s BFS always
+indexed straight into the Tier 1 buffer via the current node's catalog
+index, but the Sun (`SUN_IDX = -1`) has no row there. `queryNeighbors`
+split into a position-based `queryNeighborsAt` plus a thin index-based
+wrapper; `runOutbreak` now takes an explicit `patientZeroPos` and only
+uses the position-based query for the seed node (every subsequent queue
+entry is always a real star, so the existing index path is untouched).
+`App.jsx`'s geometry-building loop gained a `posOf(idx)` helper so both
+the infected-points and cascade-edge buffers substitute `(0,0,0)` for the
+Sun instead of indexing off the end of the catalog array. Verified: typed
+"Tau Ceti", ArrowDown, Enter selected it with no mouse click; typed "Sun",
+Enter alone (no arrow) fell back to the top result and selected it; a
+20 ly/95% outbreak released from the Sun percolated to 15,146 stars
+(12.31%) with the cascade visibly converging on the Sun's screen position,
+no console errors.
+
 **Universes.** A curated-JSON catalog of sci-fi settings mapped onto real
 stars: author/work, star mappings (real index ↔ fictional name, each with a
 canon citation — omit or flag any mapping that can't be sourced, never guess

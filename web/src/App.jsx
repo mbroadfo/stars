@@ -791,12 +791,17 @@ export default function App() {
     // uploads both overlay geometries. Reads params from the s.* mirrors,
     // not React state directly, so it always sees the latest slider values
     // even though this closure is only created once per catalog load.
+    // idx===SUN_IDX has no row in cat.data (it's a code sentinel, see
+    // App.jsx:18-20) — every place below that would otherwise index
+    // straight into the catalog buffer goes through this instead.
+    const posOf = (idx) => (idx === SUN_IDX ? [0, 0, 0] : [cat.data[idx * STRIDE], cat.data[idx * STRIDE + 1], cat.data[idx * STRIDE + 2]]);
     s.releaseOutbreak = () => {
       const grid = s.infectionGrid;
       const pz = s.patientZero;
       if (!cat || !grid || pz == null) return;
+      const [pzx, pzy, pzz] = posOf(pz);
       const run = runOutbreak({
-        cat, grid, patientZero: pz,
+        cat, grid, patientZero: pz, patientZeroPos: { x: pzx, y: pzy, z: pzz },
         hopRangeLy: s.hopRangeLy ?? 8,
         transmitChance: s.transmitChance ?? 0.7,
         incubationYears: s.incubationYears ?? 1,
@@ -814,8 +819,8 @@ export default function App() {
       const epochArr = new Float32Array(n);
       for (let k = 0; k < n; k++) {
         const idx = run.order[k];
-        const o = idx * STRIDE;
-        posArr[k * 3] = cat.data[o]; posArr[k * 3 + 1] = cat.data[o + 1]; posArr[k * 3 + 2] = cat.data[o + 2];
+        const [x, y, z] = posOf(idx);
+        posArr[k * 3] = x; posArr[k * 3 + 1] = y; posArr[k * 3 + 2] = z;
         epochArr[k] = run.generation.get(idx) * run.incubationYears;
       }
       infGeo.setAttribute("position", new THREE.BufferAttribute(posArr, 3));
@@ -826,9 +831,9 @@ export default function App() {
       const lineEpoch = new Float32Array(edgeCount * 2);
       let e = 0;
       for (const [childIdx, parentIdx] of run.parent.entries()) {
-        const co = childIdx * STRIDE, po = parentIdx * STRIDE;
-        linePos[e * 6] = cat.data[po]; linePos[e * 6 + 1] = cat.data[po + 1]; linePos[e * 6 + 2] = cat.data[po + 2];
-        linePos[e * 6 + 3] = cat.data[co]; linePos[e * 6 + 4] = cat.data[co + 1]; linePos[e * 6 + 5] = cat.data[co + 2];
+        const [px, py, pz2] = posOf(parentIdx), [cx, cy, cz] = posOf(childIdx);
+        linePos[e * 6] = px; linePos[e * 6 + 1] = py; linePos[e * 6 + 2] = pz2;
+        linePos[e * 6 + 3] = cx; linePos[e * 6 + 4] = cy; linePos[e * 6 + 5] = cz;
         const childEpoch = run.generation.get(childIdx) * run.incubationYears;
         lineEpoch[e * 2] = childEpoch; lineEpoch[e * 2 + 1] = childEpoch;
         e++;
@@ -1575,6 +1580,7 @@ export default function App() {
   const StarSearch = ({ placeholder, excludeIdx, allowSun = false, onPick }) => {
     const [q, setQ] = useState("");
     const [open, setOpen] = useState(false);
+    const [highlighted, setHighlighted] = useState(-1); // -1 = none; Enter falls back to the top result
     const results = useMemo(() => {
       if (!cat || q.trim().length === 0) return [];
       const ql = q.trim().toLowerCase();
@@ -1601,24 +1607,43 @@ export default function App() {
       }
       return out;
     }, [q, excludeIdx, allowSun]);
+    const pick = (idx) => { onPick(idx); setQ(""); setOpen(false); setHighlighted(-1); };
+    const onKeyDown = (e) => {
+      if (!open || results.length === 0) return;
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setHighlighted((h) => Math.min(h + 1, results.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setHighlighted((h) => Math.max(h - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        pick(results[highlighted >= 0 ? highlighted : 0].idx);
+      } else if (e.key === "Escape") {
+        setOpen(false);
+        setHighlighted(-1);
+      }
+    };
     return (
       <div style={{ position: "relative", marginTop: 6 }}>
         <input value={q} placeholder={placeholder}
-          onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+          onChange={(e) => { setQ(e.target.value); setOpen(true); setHighlighted(-1); }}
           onFocus={() => setOpen(true)}
           onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onKeyDown={onKeyDown}
           style={{ ...mono, fontSize: 11, width: "100%", boxSizing: "border-box", padding: "5px 8px",
             background: "rgba(255,255,255,0.04)", border: "1px solid rgba(232,180,90,0.3)",
             borderRadius: 4, color: "#dfe6f2", outline: "none" }} />
         {open && results.length > 0 && (
           <div style={{ position: "absolute", top: "100%", left: 0, right: 0, marginTop: 2, zIndex: 5,
             ...panel, padding: "4px 0", maxHeight: 180, overflowY: "auto" }}>
-            {results.map((r) => (
+            {results.map((r, i) => (
               <div key={r.idx}
-                onMouseDown={() => { onPick(r.idx); setQ(""); setOpen(false); }}
-                style={{ ...mono, fontSize: 11, padding: "5px 10px", cursor: "pointer", color: r.idx === SUN_IDX ? "#fff3e0" : "#dfe6f2" }}
-                onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(232,180,90,0.15)")}
-                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
+                onMouseDown={() => pick(r.idx)}
+                onMouseEnter={() => setHighlighted(i)}
+                style={{ ...mono, fontSize: 11, padding: "5px 10px", cursor: "pointer",
+                  color: r.idx === SUN_IDX ? "#fff3e0" : "#dfe6f2",
+                  background: highlighted === i ? "rgba(232,180,90,0.15)" : "transparent" }}>
                 {r.name}
               </div>
             ))}
@@ -1968,7 +1993,7 @@ export default function App() {
                 <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginBottom: 3 }}>patient zero</div>
                 <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
                   <div style={{ flex: 1 }}>
-                    <StarSearch placeholder={patientZeroName ?? "search stars…"} onPick={(idx) => stateRef.current.setPatientZero?.(idx)} allowSun={false} />
+                    <StarSearch placeholder={patientZeroName ?? "search stars… (or “Sun”)"} onPick={(idx) => stateRef.current.setPatientZero?.(idx)} allowSun />
                   </div>
                   <button onClick={() => setInfectionPickArmed((v) => !v)} title="click a star on the map"
                     style={{ ...mono, fontSize: 10, padding: "5px 8px", borderRadius: 4, cursor: "pointer", marginTop: 6,

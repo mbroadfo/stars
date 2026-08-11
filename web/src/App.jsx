@@ -19,6 +19,15 @@ const PICK_MAG_LIMIT = 3.0; // unnamed stars brighter than this are still pickab
 const SUN_IDX = -1; // sentinel: an explicit Sun pick inside `selected`, alongside a real star
 const sunStar = () => ({ i: SUN_IDX, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ly: 0, rv: 0, name: "Sun" });
 const getStarOrSun = (cat, idx) => (idx === SUN_IDX ? sunStar() : getStar(cat, idx));
+// Matches a typed query against a stored Bayer/Flamsteed designation like
+// "Tau Cet" — per-token, bidirectional prefix (the stored form uses the
+// 3-letter IAU constellation abbreviation, but people type the genitive,
+// e.g. "Tau Ceti"; "ceti".startsWith("cet") catches that direction).
+const bayerMatch = (desig, query) => {
+  const d = desig.toLowerCase().split(" "), q = query.toLowerCase().split(" ").filter(Boolean);
+  if (!q.length || q.length > d.length) return false;
+  return q.every((qt, i) => d[i].startsWith(qt) || qt.startsWith(d[i]));
+};
 const KMS_TO_LYYR = 1 / C_KMS; // km/s -> ly/yr, for time-scrub position displacement
 const YEARS_PER_SEC = 2500;    // playback rate: a full ±100k sweep takes 80s
 const YEARS_MAX = 100000;
@@ -535,7 +544,7 @@ export default function App() {
     // over all 123k every mousemove would burn the frame budget).
     const pickable = [];
     for (let i = 0; i < n; i++) {
-      if (cat.nameByIndex.has(i) || cat.data[i * STRIDE + 6] <= PICK_MAG_LIMIT) pickable.push(i);
+      if (cat.nameByIndex.has(i) || cat.desigByIndex?.has(i) || cat.data[i * STRIDE + 6] <= PICK_MAG_LIMIT) pickable.push(i);
     }
     const starAt = (i) => getStar(cat, i);
 
@@ -911,11 +920,20 @@ export default function App() {
       const yrs = (s.effYears ?? 0) * KMS_TO_LYYR; // box select is atlas-only, gated at the call site
       const morph = s.travelMorph ?? 0;
       const ty = s.tier1TravelYears;
+      // RANGE GATE distance still applies here (gated-out stars shouldn't
+      // appear), but NAKED EYE magnitude deliberately does not — box-select's
+      // whole point is surfacing faint stars you can't otherwise click.
+      const gate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
       for (let i = 0; i < n; i++) {
         const o = i * STRIDE;
         const dx = cat.data[o] + cat.data[o + 3] * yrs;
         const dy = cat.data[o + 1] + cat.data[o + 4] * yrs;
         const dz = cat.data[o + 2] + cat.data[o + 5] * yrs;
+        if (gate > 0) {
+          const dSun = Math.hypot(dx, dy, dz);
+          const gateFade = 1 - 0.9 * smooth(gate * 0.8, gate * 1.3, dSun);
+          if (gateFade < 0.15) continue;
+        }
         const [px, py, pz] = ty ? morphPos(dx, dy, dz, ty[i], morph) : [dx, dy, dz];
         boxVec.set(px, py, pz).project(camera);
         if (boxVec.z > 1) continue;
@@ -924,8 +942,19 @@ export default function App() {
         const camDist = camera.position.distanceTo(boxVec.set(dx, dy, dz));
         matches.push({
           idx: i, mag: cat.data[o + 6], ly: Math.hypot(dx, dy, dz),
-          camDist, name: cat.nameByIndex.get(i)?.name ?? null,
+          camDist, name: cat.nameByIndex.get(i)?.name ?? cat.desigByIndex?.get(i) ?? null,
         });
+      }
+      // The Sun: fixed at world origin, not a row in the buffer above.
+      if (!(gate > 0 && 1 - 0.9 * smooth(gate * 0.8, gate * 1.3, 0) < 0.15)) {
+        boxVec.set(0, 0, 0).project(camera);
+        if (boxVec.z <= 1) {
+          const sx = (boxVec.x * 0.5 + 0.5) * rect.width, sy = (-boxVec.y * 0.5 + 0.5) * rect.height;
+          if (sx >= left && sx <= right && sy >= top && sy <= bottom) {
+            const camDist = camera.position.distanceTo(boxVec.set(0, 0, 0));
+            matches.push({ idx: SUN_IDX, mag: 4.83, ly: 0, camDist, name: "Sun" });
+          }
+        }
       }
       setBoxResults(matches);
     }
@@ -1019,6 +1048,23 @@ export default function App() {
       const isShip = s.mode === "ship";
       const magLimit = s.skyMode === "eye" ? 6.5 : 99;
       const gate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
+      // The Sun: a code-level sentinel, not a row in `pickable` (see catalog
+      // layout — it isn't in the buffer at all), so it's tested separately.
+      // Always naked-eye visible by definition (only RANGE GATE distance can
+      // filter it, not NAKED EYE magnitude); skipped if standing on it.
+      const dShipSun = isShip ? Math.hypot(s.shipPos.x, s.shipPos.y, s.shipPos.z) : 0;
+      if (!(isShip && dShipSun < 0.05)) {
+        const dGateSun = isShip ? dShipSun : 0;
+        const gateFadeSun = gate > 0 ? 1 - 0.9 * smooth(gate * 0.8, gate * 1.3, dGateSun) : 1;
+        if (gateFadeSun >= 0.15) {
+          pickVec.set(0, 0, 0).project(camera);
+          if (pickVec.z <= 1) {
+            const sx = (pickVec.x * 0.5 + 0.5) * rect.width, sy = (-pickVec.y * 0.5 + 0.5) * rect.height;
+            const d = Math.hypot(sx - px, sy - py);
+            if (d < bestD) { bestD = d; best = SUN_IDX; }
+          }
+        }
+      }
       for (const i of pickable) {
         const o = i * STRIDE;
         const x = cat.data[o] + cat.data[o + 3] * yrs;
@@ -1533,12 +1579,25 @@ export default function App() {
       if (!cat || q.trim().length === 0) return [];
       const ql = q.trim().toLowerCase();
       const out = [];
-      if (allowSun && "sun".startsWith(ql)) out.push({ idx: SUN_IDX, name: "Sun" });
+      if (allowSun && ["sun", "sol"].some((alias) => alias.startsWith(ql))) out.push({ idx: SUN_IDX, name: "Sun" });
       for (const [k, v] of cat.nameByIndex.entries()) {
         const idx = Number(k);
         if (idx === excludeIdx) continue;
         if (v.name.toLowerCase().startsWith(ql)) out.push({ idx, name: v.name });
         if (out.length >= 8) break;
+      }
+      // Stars with no IAU proper name (e.g. Tau Ceti) — searchable by their
+      // Bayer/Flamsteed designation. Skipped if already matched above by a
+      // proper name, so a star never appears twice. Bidirectional per-token
+      // prefix match, since the stored form uses the 3-letter constellation
+      // abbreviation ("Tau Cet") but people type the genitive ("Tau Ceti").
+      if (out.length < 8 && cat.desigByIndex) {
+        for (const [k, desig] of cat.desigByIndex.entries()) {
+          if (out.length >= 8) break;
+          const idx = Number(k);
+          if (idx === excludeIdx || cat.nameByIndex.has(idx)) continue;
+          if (bayerMatch(desig, ql)) out.push({ idx, name: desig });
+        }
       }
       return out;
     }, [q, excludeIdx, allowSun]);

@@ -13,10 +13,11 @@ async function fetchJson(url) {
 }
 
 export async function loadCatalog(base = "/data/tier1") {
-  const [manifest, names, asterisms] = await Promise.all([
+  const [manifest, names, asterisms, desig] = await Promise.all([
     fetchJson(`${base}/manifest.json`),
     fetchJson(`${base}/names.json`),
     fetchJson(`${base}/asterisms.json`).catch(() => null), // absent on stale data
+    fetchJson(`${base}/desig.json`).catch(() => null), // Bayer/Flamsteed designations — stars with no IAU proper name (e.g. Tau Cet)
   ]);
   const r = await fetch(`${base}/tier1.bin`);
   if (!r.ok) throw new Error(`${base}/tier1.bin: HTTP ${r.status}`);
@@ -37,7 +38,13 @@ export async function loadCatalog(base = "/data/tier1") {
   const nameByIndex = new Map();
   for (const [k, v] of Object.entries(names)) nameByIndex.set(Number(k), v);
 
-  return { data, count, manifest, nameByIndex, asterisms };
+  // desig.json: { "<row index>": "Tau Cet" } — Bayer/Flamsteed designation
+  // string ("<letter/number> <3-letter IAU constellation abbreviation>"),
+  // for stars without a proper name in names.json.
+  const desigByIndex = new Map();
+  if (desig) for (const [k, v] of Object.entries(desig)) desigByIndex.set(Number(k), v);
+
+  return { data, count, manifest, nameByIndex, desigByIndex, asterisms };
 }
 
 // Tier 2 far field: real stars 3,000-50,000 ly, 5 floats/star —
@@ -74,7 +81,10 @@ export function getStar(cat, i) {
     ly,
     // Heliocentric radial velocity: v · unit(pos). Negative = approaching.
     rv: ly > 0 ? (vx * x + vy * y + vz * z) / ly : 0,
-    name: named?.name ?? null,
+    // Falls back to the Bayer/Flamsteed designation (e.g. "Tau Cet") for
+    // the ~3,300 real stars with no IAU proper name — every existing
+    // display site that reads `.name` picks this up for free.
+    name: named?.name ?? cat.desigByIndex?.get(i) ?? null,
     spect: named?.spect ?? null,
   };
 }

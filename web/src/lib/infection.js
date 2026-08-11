@@ -24,12 +24,13 @@ export function buildNeighborGrid(cat) {
   return grid;
 }
 
-// Candidates within rangeLy of star `idx`, exact-sphere filtered (the cell
-// scan is a cube, so corner cells can contain false positives).
-export function queryNeighbors(grid, cat, idx, rangeLy) {
+// Candidates within rangeLy of (x,y,z), exact-sphere filtered (the cell
+// scan is a cube, so corner cells can contain false positives). `excludeIdx`
+// skips a candidate matching that catalog index (the source star itself);
+// harmless to pass a value that never appears in the grid (e.g. the Sun's
+// sentinel index), since no bucket entry will ever equal it.
+function queryNeighborsAt(grid, cat, x, y, z, rangeLy, excludeIdx) {
   const { data } = cat;
-  const o = idx * STRIDE;
-  const x = data[o], y = data[o + 1], z = data[o + 2];
   const ix = Math.floor(x / CELL_LY), iy = Math.floor(y / CELL_LY), iz = Math.floor(z / CELL_LY);
   const r = Math.max(1, Math.ceil(rangeLy / CELL_LY));
   const rangeSq = rangeLy * rangeLy;
@@ -40,7 +41,7 @@ export function queryNeighbors(grid, cat, idx, rangeLy) {
         const bucket = grid.get(cellKey(ix + dx, iy + dy, iz + dz));
         if (!bucket) continue;
         for (const j of bucket) {
-          if (j === idx) continue;
+          if (j === excludeIdx) continue;
           const jo = j * STRIDE;
           const ddx = data[jo] - x, ddy = data[jo + 1] - y, ddz = data[jo + 2] - z;
           if (ddx * ddx + ddy * ddy + ddz * ddz <= rangeSq) out.push(j);
@@ -49,6 +50,12 @@ export function queryNeighbors(grid, cat, idx, rangeLy) {
     }
   }
   return out;
+}
+
+// Candidates within rangeLy of star `idx`.
+export function queryNeighbors(grid, cat, idx, rangeLy) {
+  const o = idx * STRIDE;
+  return queryNeighborsAt(grid, cat, cat.data[o], cat.data[o + 1], cat.data[o + 2], rangeLy, idx);
 }
 
 // Percolated-or-died is a first-pass heuristic, not a validated threshold:
@@ -61,7 +68,11 @@ const PERCOLATION_FRACTION = 0.01;
 // permanently immunize that neighbor — a *different* already-infected
 // neighbor can still reach it later on its own turn, which falls out of
 // "skip only if already infected" with no extra bookkeeping.
-export function runOutbreak({ cat, grid, patientZero, hopRangeLy, transmitChance, incubationYears }) {
+// `patientZeroPos` is required even for an ordinary star (just its own
+// x,y,z) — keeps this module ignorant of what a negative `patientZero`
+// value might mean (the Sun sentinel is an App.jsx concept); the BFS just
+// needs *a* position to seed the first query from.
+export function runOutbreak({ cat, grid, patientZero, patientZeroPos, hopRangeLy, transmitChance, incubationYears }) {
   const parent = new Map(); // idx -> parent idx (for the cascade-tree edges)
   const generation = new Map();
   const order = []; // BFS level order: non-decreasing in generation
@@ -73,7 +84,9 @@ export function runOutbreak({ cat, grid, patientZero, hopRangeLy, transmitChance
   while (head < queue.length) {
     const i = queue[head++];
     const gen = generation.get(i);
-    const neighbors = queryNeighbors(grid, cat, i, hopRangeLy);
+    const neighbors = i === patientZero
+      ? queryNeighborsAt(grid, cat, patientZeroPos.x, patientZeroPos.y, patientZeroPos.z, hopRangeLy, patientZero)
+      : queryNeighbors(grid, cat, i, hopRangeLy);
     for (const j of neighbors) {
       if (generation.has(j)) continue;
       if (Math.random() >= transmitChance) continue;

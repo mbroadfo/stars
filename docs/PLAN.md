@@ -642,6 +642,26 @@ has no IAU proper name) rendered as `STAR #7118` in the route header and
 trip bar instead of `TAU CET`. Same class of gap as the `computeBoxSelect`
 fix earlier this session, just a different call site; fixed the same way.
 
+**Fixed 2026-08-12 — ship-view touch look-around** (user: "it works great
+on desktop — not on mobile"). Root cause: `onTM` (the touch-move handler)
+never branched on `s.mode === "ship"` at all, unlike the mouse handler
+right above it — a 1-finger drag always drove the atlas `theta`/`phi`
+orbit and a 2-finger pinch always drove `radius`/`panBy`, none of which
+ship mode's camera reads (it uses `shipYaw`/`shipPitch`/`shipFov`
+instead), so touch input in ship view silently updated variables nobody
+was looking at. Added the same `s.mode === "ship"` branch already used in
+the mouse path: 1-finger drag now drives `shipYaw`/`shipPitch` with the
+identical sensitivity formula, 2-finger pinch drives `shipFov` (mirroring
+`onWheel`'s ship-mode zoom) instead of `panBy`, which has no ship-view
+equivalent (no separate camera target to pan when the camera *is* the
+ship). Verified with synthetic `TouchEvent`s dispatched at the canvas in
+headless Chrome (real touch hardware isn't available to test with, so
+this is the closest verifiable proxy — trusted-vs-untrusted event dispatch
+doesn't affect whether `addEventListener` fires): before the fix a 1-
+finger drag left the view unchanged; after, the same drag swings Orion off
+to the left edge and brings Capella/Auriga to center (yaw), and a second
+drag correctly tilts the view (pitch) — both screenshot-confirmed.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

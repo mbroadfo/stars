@@ -1191,15 +1191,31 @@ export default function App() {
       if (!touch) return;
       if (touch.mode === "orbit" && e.touches.length === 1) {
         const t = e.touches[0];
-        s.theta -= (t.clientX - touch.x) * 0.0055;
-        s.phi = Math.max(0.05, Math.min(Math.PI - 0.05, s.phi - (t.clientY - touch.y) * 0.0055));
+        const dx = t.clientX - touch.x, dy = t.clientY - touch.y;
+        if (s.mode === "ship") {
+          // Same grab-the-sky look-around as the mouse path (onMove above)
+          // — this branch was missing entirely, so a 1-finger drag in ship
+          // view updated theta/phi, which ship mode's camera never reads.
+          const k = 0.0022 * (s.shipFov / 60);
+          s.shipYaw -= dx * k;
+          s.shipPitch = Math.max(-1.55, Math.min(1.55, s.shipPitch + dy * k));
+        } else {
+          s.theta -= dx * 0.0055;
+          s.phi = Math.max(0.05, Math.min(Math.PI - 0.05, s.phi - dy * 0.0055));
+        }
         touch.x = t.clientX; touch.y = t.clientY;
       } else if (touch.mode === "pinch" && e.touches.length === 2) {
         const [a, b] = e.touches;
         const d = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
-        s.radius = Math.max(0.4, Math.min(220000, s.radius * (touch.d / d)));
         const cx = (a.clientX + b.clientX) / 2, cy = (a.clientY + b.clientY) / 2;
-        panBy(cx - touch.cx, cy - touch.cy);
+        if (s.mode === "ship") {
+          // Mirrors onWheel's ship-mode FOV zoom (there's no separate
+          // camera target to pan in ship view, so no panBy equivalent).
+          s.shipFov = Math.max(25, Math.min(100, s.shipFov * (touch.d / d)));
+        } else {
+          s.radius = Math.max(0.4, Math.min(220000, s.radius * (touch.d / d)));
+          panBy(cx - touch.cx, cy - touch.cy);
+        }
         touch.d = d; touch.cx = cx; touch.cy = cy;
       }
     };

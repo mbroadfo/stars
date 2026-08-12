@@ -5,6 +5,10 @@
 
 export const STRIDE = 8;
 export const CI_SENTINEL = 50.0; // treat ci above this as "missing"
+// Sentinel for an explicit Sun pick alongside a real catalog index (the Sun
+// isn't a row in the buffer) — canonical home here so any module resolving
+// star identities (App.jsx, universes.js) can share the same value.
+export const SUN_IDX = -1;
 
 async function fetchJson(url) {
   const r = await fetch(url);

@@ -1,9 +1,11 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from "react";
 import * as THREE from "three";
-import { loadCatalog, loadFarField, getStar, STRIDE, CI_SENTINEL } from "./lib/catalog.js";
+import { loadCatalog, loadFarField, getStar, STRIDE, CI_SENTINEL, SUN_IDX } from "./lib/catalog.js";
 import { journey, brachAt, closureRate, separationLy, advanceStar, closestApproach, fmt, fmtYears, KM_PER_LY, C_KMS, G_LY_YR2 } from "./lib/physics.js";
 import { ciToRgb, rgbToCss } from "./lib/color.js";
 import { buildNeighborGrid, runOutbreak, infectedCountAtEpoch } from "./lib/infection.js";
+import { resolveUniverses } from "./lib/universes.js";
+import universesData from "./content/universes.json";
 
 /* ============================================================
    STELLAR NEIGHBORHOOD — a navigable atlas (S2)
@@ -16,7 +18,6 @@ import { buildNeighborGrid, runOutbreak, infectedCountAtEpoch } from "./lib/infe
 const AMBER = "#e8b45a";
 const ICE = "#8fd3ff";
 const PICK_MAG_LIMIT = 3.0; // unnamed stars brighter than this are still pickable
-const SUN_IDX = -1; // sentinel: an explicit Sun pick inside `selected`, alongside a real star
 const sunStar = () => ({ i: SUN_IDX, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ly: 0, rv: 0, name: "Sun" });
 const getStarOrSun = (cat, idx) => (idx === SUN_IDX ? sunStar() : getStar(cat, idx));
 // Matches a typed query against a stored Bayer/Flamsteed designation like
@@ -168,6 +169,11 @@ export default function App() {
   const [trip, setTrip] = useState(null);          // { D, name } — static trip facts
   const [tripUi, setTripUi] = useState(null);      // { frac, shipYears, earthYears, beta, gamma }
   const [tripPlaying, setTripPlaying] = useState(false);
+  // S6 Universes — a route chains multiple single-leg trips (s.trip above
+  // still drives exactly one leg at a time, unchanged); { stopNames,
+  // legIdx, cumShipYears, cumEarthYears, legLedger } or null for a plain
+  // single-star trip started the normal way (SELECTION panel).
+  const [route, setRoute] = useState(null);
 
   const [showLines, setShowLines] = useState(true);
   const [showNames, setShowNames] = useState(true); // star name labels only — landmark tags unaffected
@@ -210,6 +216,13 @@ export default function App() {
   const [infectionSummary, setInfectionSummary] = useState(null); // {totalInfected,maxGeneration,maxEpoch,percolated}
   const [infectionEpoch, setInfectionEpoch] = useState(0);
   const [infectionEpochPlaying, setInfectionEpochPlaying] = useState(false);
+
+  // S6 Universes — curated sci-fi settings mapped onto real stars (see
+  // lib/universes.js + data/universes.json). Resolved once per catalog
+  // load; an unresolvable star mapping is flagged in the UI, never hidden.
+  const [universesOpen, setUniversesOpen] = useState(true);
+  const [selectedUniverseId, setSelectedUniverseId] = useState(null);
+  const universes = useMemo(() => (cat ? resolveUniverses(cat, universesData) : []), [cat]);
 
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
@@ -315,17 +328,22 @@ export default function App() {
     // it's where you land: the next departure continues from this epoch.
     s.exitShip = () => {
       if (s.trip) {
-        s.years = (s.years ?? 0) + brachAt(s.trip.D, s.accel ?? 1, s.trip.frac).earthYears;
+        // A route's already-completed legs are baked in as they finish
+        // (see continueRoute below) — only the current, possibly-partial
+        // leg's elapsed Earth-time still needs adding here.
+        const routeEarth = s.route ? s.route.cumEarthYears : 0;
+        s.years = (s.years ?? 0) + routeEarth + brachAt(s.trip.D, s.accel ?? 1, s.trip.frac).earthYears;
         setYears(s.years);
       }
       s.mode = "atlas";
       s.trip = null;
+      s.route = null;
       s.originIdx = null;
       s.shipPos.set(0, 0, 0);
       camera.fov = 55;
       camera.updateProjectionMatrix();
       setShipView(false);
-      setTrip(null); setTripUi(null); setTripPlaying(false);
+      setTrip(null); setTripUi(null); setTripPlaying(false); setRoute(null);
     };
     s.startTrip = () => {
       if (s.mode !== "ship" || s.targetIdx == null) return;
@@ -334,6 +352,31 @@ export default function App() {
       s.trip = { from, to, D: to.distanceTo(from), frac: 0, playing: true, durSec: 40 };
       setTrip({ D: s.trip.D, name: nameFor(s.targetIdx), originName: nameFor(s.originIdx) });
       setTripPlaying(true);
+    };
+    // S6 Universes: chains N-1 single-leg trips across N stops, reusing
+    // startTrip/enterShip verbatim for each leg — this is orchestration on
+    // top of the existing single-leg machinery, not a parallel engine.
+    s.startRoute = (stopIdxs) => {
+      if (stopIdxs.length < 2) return;
+      s.route = { stops: stopIdxs, legIdx: 0, cumShipYears: 0, cumEarthYears: 0, legLedger: [] };
+      s.enterShip(stopIdxs[1], stopIdxs[0]);
+      s.startTrip();
+      setRoute({ stopNames: stopIdxs.map(nameFor), legIdx: 0, cumShipYears: 0, cumEarthYears: 0, legLedger: [] });
+    };
+    // Explicit user action on arrival (same "you choose to depart" UX as
+    // the original single Start-trip button) — bakes the just-finished leg
+    // into the running ledger, re-aims, and departs the next leg.
+    s.continueRoute = () => {
+      const R = s.route;
+      if (!R || !s.trip) return;
+      const totals = journey(s.trip.D, s.accel ?? 1); // frac=1 whole-leg totals
+      R.legLedger.push({ from: nameFor(s.originIdx), to: nameFor(s.targetIdx), D: s.trip.D, shipYears: totals.shipYears, earthYears: totals.earthYears });
+      R.cumShipYears += totals.shipYears;
+      R.cumEarthYears += totals.earthYears;
+      R.legIdx++;
+      s.enterShip(R.stops[R.legIdx + 1], R.stops[R.legIdx]);
+      s.startTrip();
+      setRoute({ stopNames: R.stops.map(nameFor), legIdx: R.legIdx, cumShipYears: R.cumShipYears, cumEarthYears: R.cumEarthYears, legLedger: [...R.legLedger] });
     };
     // Swap origin/destination — works before a trip starts (re-parks the ship
     // at the new origin) and mid-trip, playing or paused (flips from/to and
@@ -2072,6 +2115,58 @@ export default function App() {
           </div>
         )}
 
+        {!shipView && universes.length > 0 && (
+          <div style={{ ...panel, padding: "9px 10px" }}>
+            <div onClick={() => setUniversesOpen((v) => !v)}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: universesOpen ? 7 : 0 }}>
+              <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>UNIVERSES</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{universesOpen ? "▾" : "▸"}</span>
+            </div>
+            {universesOpen && (
+              <>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {universes.map((u) => (
+                    <button key={u.id} onClick={() => setSelectedUniverseId(u.id === selectedUniverseId ? null : u.id)}
+                      style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                        background: selectedUniverseId === u.id ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.1)",
+                        border: `1px solid rgba(232,180,90,${selectedUniverseId === u.id ? 0.7 : 0.35})`, color: "#e8c88a" }}>
+                      {u.title}
+                    </button>
+                  ))}
+                </div>
+                {universes.filter((u) => u.id === selectedUniverseId).map((u) => (
+                  <div key={u.id}>
+                    <div style={{ ...mono, fontSize: 9.5, color: "#8fa0c0", marginTop: 8, lineHeight: 1.5 }}>
+                      {u.author} — {u.blurb}
+                    </div>
+                    <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginTop: 8 }}>star mappings</div>
+                    {u.stars.map((s) => (
+                      <div key={s.fictionalName} style={{ marginTop: 4 }}>
+                        <div style={{ ...mono, fontSize: 10.5, color: s.resolved ? "#dfe6f2" : "#e8a07a" }}>
+                          {s.fictionalName} → {s.resolved ? s.realName : "unresolved ⚠"}
+                        </div>
+                        <div style={{ ...mono, fontSize: 8.5, color: "#5a6a8f", lineHeight: 1.4 }}>{s.citation}</div>
+                      </div>
+                    ))}
+                    <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginTop: 8 }}>routes</div>
+                    {u.routes.map((r) => (
+                      <button key={r.id} disabled={!r.resolved}
+                        title={r.citation}
+                        onClick={() => stateRef.current.startRoute?.(r.stopIdx)}
+                        style={{ ...mono, fontSize: 10, width: "100%", textAlign: "left", padding: "5px 8px", marginTop: 4, borderRadius: 4,
+                          cursor: r.resolved ? "pointer" : "default",
+                          background: "rgba(232,180,90,0.08)", border: `1px solid rgba(232,180,90,${r.resolved ? 0.35 : 0.15})`,
+                          color: r.resolved ? "#e8c88a" : "#5a6a8f" }}>
+                        {r.resolved ? "▶ " : "⚠ "}{r.title}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
         {selected.length > 0 && (
           <div style={{ ...panel, padding: "9px 10px" }}>
             <div style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em", marginBottom: 7 }}>SELECTION</div>
@@ -2158,9 +2253,20 @@ export default function App() {
         </div>
       )}
 
-      {/* Trip instrument bar */}
+      {/* Trip instrument bar — additive when a route (S6 Universes) is
+          active: a plain single-star trip (route===null) renders exactly
+          as before. */}
       {shipView && trip && (
         <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)", ...panel, padding: "10px 16px", width: 620, borderColor: "rgba(232,180,90,0.5)" }}>
+          {route && (
+            <div style={{ ...mono, fontSize: 9.5, color: "#8fa0c0", marginBottom: 6, letterSpacing: "0.08em" }}>
+              ROUTE · {route.stopNames.map((n, i) => (
+                <span key={i} style={{ color: i === route.legIdx || i === route.legIdx + 1 ? AMBER : "#8fa0c0" }}>
+                  {n.toUpperCase()}{i < route.stopNames.length - 1 ? " → " : ""}
+                </span>
+              ))} · leg {route.legIdx + 1} of {route.stopNames.length - 1}
+            </div>
+          )}
           <div style={{ ...mono, fontSize: 10, color: AMBER, letterSpacing: "0.2em" }}>
             TRIP · {trip.originName.toUpperCase()} → {trip.name.toUpperCase()} · {fmt(trip.D, 2)} LY · CONSTANT {accel} g
           </div>
@@ -2182,7 +2288,26 @@ export default function App() {
               <span>Earth <span style={{ color: "#fff" }}>{fmtYears(tripUi.earthYears)}</span></span>
               <span>speed <span style={{ color: "#fff" }}>{(tripUi.beta * 100).toFixed(tripUi.beta > 0.99 ? 3 : 1)}% c</span></span>
               <span>γ <span style={{ color: "#fff" }}>{fmt(tripUi.gamma, 2)}×</span></span>
-              {tripUi.frac >= 1 && <span style={{ color: AMBER }}>ARRIVED</span>}
+              {tripUi.frac >= 1 && !route && <span style={{ color: AMBER }}>ARRIVED</span>}
+            </div>
+          )}
+          {route && tripUi?.frac >= 1 && (
+            route.legIdx < route.stopNames.length - 2 ? (
+              <button onClick={() => stateRef.current.continueRoute?.()}
+                style={{ ...mono, fontSize: 11, width: "100%", marginTop: 8, padding: "6px 0", borderRadius: 4, cursor: "pointer",
+                  background: "rgba(232,180,90,0.22)", border: "1px solid rgba(232,180,90,0.7)", color: "#f0d9a8" }}>
+                ARRIVED — continue to {route.stopNames[route.legIdx + 2]?.toUpperCase()}
+              </button>
+            ) : (
+              <div style={{ ...mono, fontSize: 11, color: AMBER, marginTop: 8, textAlign: "center" }}>
+                ARRIVED — ROUTE COMPLETE
+              </div>
+            )
+          )}
+          {route && (
+            <div style={{ ...mono, fontSize: 10.5, color: "#8fa0c0", marginTop: 6, textAlign: "center", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: 6 }}>
+              route total — ship <span style={{ color: "#fff" }}>{fmtYears(route.cumShipYears + (tripUi?.shipYears ?? 0))}</span>
+              {" "}· Earth <span style={{ color: "#fff" }}>{fmtYears(route.cumEarthYears + (tripUi?.earthYears ?? 0))}</span>
             </div>
           )}
           <div style={{ ...mono, fontSize: 10, color: "#66779a", marginTop: 6, textAlign: "center" }}>

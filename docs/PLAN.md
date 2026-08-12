@@ -401,7 +401,7 @@ thousands of light-years — collapses into a small central cluster, because
 under constant 1g even a 50,000 ly trip only costs roughly a decade of ship
 time. That collapse *is* the feature.
 
-### S6 — Layers & Labs (Infection Lab shipped; Universes planned)
+### S6 — Layers & Labs (shipped)
 
 Shared infrastructure: **a spatial neighbor index over Tier 1** ("which
 stars lie within R ly of X"). Built as a uniform 3D grid, fixed cell size
@@ -541,23 +541,54 @@ Enter alone (no arrow) fell back to the top result and selected it; a
 (12.31%) with the cascade visibly converging on the Sun's screen position,
 no console errors.
 
-**Universes.** A curated-JSON catalog of sci-fi settings mapped onto real
-stars: author/work, star mappings (real index ↔ fictional name, each with a
-canon citation — omit or flag any mapping that can't be sourced, never guess
-one in), and canon routes. A route is a multi-hop sequence handed to the
-trip engine — **this needs the trip engine to chain legs**, accumulating a
-running crew-age/Earth-calendar ledger across the whole route, which is
-exactly the substance of the old, now-unscheduled "route planner" idea (see
-Backlog) resurfacing here as a real S6 prerequisite, not a deferred nicety.
-First universe: Niven's Known Space — deliberately chosen because its
-colonization era is STL slowboats under constant acceleration, so Sol→
-Wunderland (Alpha Centauri) in ship view *is* the slowboat experience our
-own journey math already computes; canon star mappings to be fact-checked
-against source material at build time, not asserted from memory here.
-Second universe: *Project Hail Mary* itself — Tau Ceti, with the astrophage
-trace-back chain built as a hop-constrained path through the same neighbor
-index the Infection Lab uses (deliberate machinery kinship, not a
-coincidence).
+**Shipped 2026-08-11 — Universes.** A curated catalog of sci-fi settings
+mapped onto real stars — author/work, star mappings (fictional name ↔ real
+star, each with a citation), and canon routes flown through the trip
+engine. Two universes: Niven's Known Space (chosen because its
+colonization era is genuine STL slowboats under constant acceleration —
+*this app's own physics*) and *Project Hail Mary* itself (Tau Ceti, now
+actually selectable after the previous two PRs this session).
+
+**Content, verified before writing, not asserted from memory** (WebSearch,
+not parametric recall — matching this project's own "never guess one in"
+rule): Wunderland → Rigil Kentaurus (Alpha Centauri, ~4.3 ly; colonized
+circa 2091 — Niven's text doesn't specify component A vs B), We Made It →
+Procyon (~11.3 ly, named for a colony ship's crash landing), Jinx → Sirius,
+Plateau → Tau Cet — all four confirmed via larryniven.fandom.com. Tau Ceti
+for *Project Hail Mary* is the book's own real star, ~11.9 ly, confirmed
+via space.com's Andy Weir interview. **Deliberately did not fabricate a
+multi-hop "grand tour" route**: colonization used independent one-way
+slowboats to each destination, not a single ship hopping between systems —
+no source supports a genuine multi-stop canon voyage here, so every
+shipped route is a real, honest single leg (Sol→Wunderland, Sol→We Made
+It, Sol→Jinx, Sol→Plateau, Sol→Tau Ceti).
+
+**The multi-leg trip engine got built anyway** (per working-agreement:
+infrastructure now, content when it exists) — `s.startRoute`/
+`s.continueRoute` in App.jsx chain N-1 single-leg trips across N stops as a
+thin wrapper around the *existing*, unmodified single-leg `s.trip` (a
+plain SELECTION-panel trip is provably untouched — verified byte-for-byte
+identical instrument-bar behavior with no route active). Each leg requires
+an explicit "Continue to X" action on arrival (same explicit-departure UX
+as the original "Start trip" button, not an auto-advance), baking the
+finished leg's `journey()` totals into a running ship/Earth-years ledger.
+**Gate verified** with a temporary (not shipped) synthetic 3-stop test
+route, Sol→Sirius→Procyon: leg totals 4.61/10.36 and 3.85/6.93 ship/Earth
+years (independently computed via `journey()` in Node) summed to
+8.46/17.29, matching the in-app ledger's displayed 8.5/17.3 exactly.
+`s.exitShip()` correctly bakes the *route's* cumulative Earth-years (not
+just the current leg's) into the base epoch on landing — confirmed via a
+real single-leg route (Sol→Wunderland, 4.32 ly): ship 3.6 / Earth 6.0
+years, landing epoch read back as T+6 yr.
+
+Star mappings resolve by **name/designation, not raw catalog index**
+(`lib/universes.js`) — indices aren't stable across a `tier1.bin` rebuild,
+names are — reusing `cat.nameByIndex`/`cat.desigByIndex` from the Sun/
+Tau-Ceti-selection PR earlier this session. `SUN_IDX` moved from a local
+App.jsx const to a `catalog.js` export so `universes.js` could share it
+without a circular import. An unresolvable mapping renders a visible
+"unresolved ⚠" in the UNIVERSES panel instead of being silently dropped —
+verified with a temporary bad mapping before removing it.
 
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 

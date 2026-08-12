@@ -1,0 +1,79 @@
+{
+  "universes": [
+    {
+      "id": "known-space",
+      "title": "Known Space",
+      "author": "Larry Niven",
+      "blurb": "Niven's future-history setting deliberately used real nearby stars for its earliest slower-than-light colonies — the constant-acceleration slowboat era this app's own trip engine already models.",
+      "stars": [
+        {
+          "fictionalName": "Wunderland",
+          "realName": "Rigil Kentaurus",
+          "citation": "Colonized circa 2091 in the Alpha Centauri system (Niven's text doesn't specify component A vs B; mapped here to Rigil Kentaurus, Alpha Centauri A) — larryniven.fandom.com/wiki/Wunderland"
+        },
+        {
+          "fictionalName": "We Made It",
+          "realName": "Procyon",
+          "citation": "Colony world orbiting Procyon, ~11.3 ly from Sol — the colony ship crash-landed, giving the world its name — larryniven.fandom.com/wiki/We_Made_It"
+        },
+        {
+          "fictionalName": "Jinx",
+          "realName": "Sirius",
+          "citation": "Colony world in the Sirius system — larryniven.fandom.com/wiki/Known_Space"
+        },
+        {
+          "fictionalName": "Plateau",
+          "realName": "Tau Cet",
+          "citation": "Colony world orbiting Tau Ceti — larryniven.fandom.com/wiki/Known_Space"
+        }
+      ],
+      "routes": [
+        {
+          "id": "sol-wunderland",
+          "title": "Sol → Wunderland",
+          "stops": ["Sun", "Rigil Kentaurus"],
+          "citation": "The first and closest Known Space colony — a real ~4.3 ly slowboat run."
+        },
+        {
+          "id": "sol-wemadeit",
+          "title": "Sol → We Made It",
+          "stops": ["Sun", "Procyon"],
+          "citation": "~11.3 ly slowboat run to Procyon."
+        },
+        {
+          "id": "sol-jinx",
+          "title": "Sol → Jinx",
+          "stops": ["Sun", "Sirius"],
+          "citation": "~8.6 ly slowboat run to Sirius."
+        },
+        {
+          "id": "sol-plateau",
+          "title": "Sol → Plateau",
+          "stops": ["Sun", "Tau Cet"],
+          "citation": "~11.9 ly slowboat run to Tau Ceti."
+        }
+      ]
+    },
+    {
+      "id": "project-hail-mary",
+      "title": "Project Hail Mary",
+      "author": "Andy Weir",
+      "blurb": "The Hail Mary's desperate flight to find a cure for astrophage — the same real star, at the same real distance, this app already computes a brachistochrone for.",
+      "stars": [
+        {
+          "fictionalName": "Tau Ceti",
+          "realName": "Tau Cet",
+          "citation": "Astrophage's home system, orbiting the real star Tau Ceti, ~11.9 ly from Sol — space.com/entertainment/space-movies-shows/i-talked-to-andy-weir-about-the-astrobiology-behind-project-hail-mary"
+        }
+      ],
+      "routes": [
+        {
+          "id": "sol-tauceti",
+          "title": "Sol → Tau Ceti (the Hail Mary's flight)",
+          "stops": ["Sun", "Tau Cet"],
+          "citation": "The ship's one-way flight to Tau Ceti at extreme constant acceleration to outrun astrophage's spread."
+        }
+      ]
+    }
+  ]
+}

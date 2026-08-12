@@ -4,7 +4,7 @@
       "id": "known-space",
       "title": "Known Space",
       "author": "Larry Niven",
-      "blurb": "Niven's future-history setting deliberately used real nearby stars for its earliest slower-than-light colonies — the constant-acceleration slowboat era this app's own trip engine already models.",
+      "blurb": "Niven's future-history setting deliberately used real nearby stars for its earliest slower-than-light colonies — the constant-acceleration slowboat era this app's own trip engine already models. Check which colonies to visit and reorder them below to build your own route.",
       "stars": [
         {
           "fictionalName": "Wunderland",
@@ -26,52 +26,31 @@
           "realName": "Tau Cet",
           "citation": "Colony world orbiting Tau Ceti — larryniven.fandom.com/wiki/Known_Space"
         }
-      ],
-      "routes": [
-        {
-          "id": "sol-wunderland",
-          "title": "Sol → Wunderland",
-          "stops": ["Sun", "Rigil Kentaurus"],
-          "citation": "The first and closest Known Space colony — a real ~4.3 ly slowboat run."
-        },
-        {
-          "id": "sol-wemadeit",
-          "title": "Sol → We Made It",
-          "stops": ["Sun", "Procyon"],
-          "citation": "~11.3 ly slowboat run to Procyon."
-        },
-        {
-          "id": "sol-jinx",
-          "title": "Sol → Jinx",
-          "stops": ["Sun", "Sirius"],
-          "citation": "~8.6 ly slowboat run to Sirius."
-        },
-        {
-          "id": "sol-plateau",
-          "title": "Sol → Plateau",
-          "stops": ["Sun", "Tau Cet"],
-          "citation": "~11.9 ly slowboat run to Tau Ceti."
-        }
       ]
     },
     {
       "id": "project-hail-mary",
       "title": "Project Hail Mary",
       "author": "Andy Weir",
-      "blurb": "The Hail Mary's desperate flight to find a cure for astrophage — the same real star, at the same real distance, this app already computes a brachistochrone for.",
+      "blurb": "Grace's full arc across the book, both real stars he actually travels to.",
       "stars": [
         {
           "fictionalName": "Tau Ceti",
           "realName": "Tau Cet",
           "citation": "Astrophage's home system, orbiting the real star Tau Ceti, ~11.9 ly from Sol — space.com/entertainment/space-movies-shows/i-talked-to-andy-weir-about-the-astrobiology-behind-project-hail-mary"
+        },
+        {
+          "fictionalName": "Erid (Rocky's home)",
+          "realName": "Keid",
+          "citation": "40 Eridani A — IAU name Keid, ~16 ly from Sol — Rocky's home star; Grace ends the book living there — projecthailmary.fandom.com/wiki/Rocky"
         }
       ],
       "routes": [
         {
-          "id": "sol-tauceti",
-          "title": "Sol → Tau Ceti (the Hail Mary's flight)",
-          "stops": ["Sun", "Tau Cet"],
-          "citation": "The ship's one-way flight to Tau Ceti at extreme constant acceleration to outrun astrophage's spread."
+          "id": "grace-full-arc",
+          "title": "Sol → Tau Ceti → Erid",
+          "stops": ["Sun", "Tau Cet", "Keid"],
+          "citation": "Grace's complete journey: the Hail Mary flies Sol→Tau Ceti alone to find a cure for astrophage; at the book's climax he turns back to rescue Rocky's dying ship and accompanies him home to Erid, where he stays — two legs of one real arc, not a single unbroken flight path."
         }
       ]
     }

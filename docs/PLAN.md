@@ -590,6 +590,58 @@ without a circular import. An unresolvable mapping renders a visible
 "unresolved ⚠" in the UNIVERSES panel instead of being silently dropped —
 verified with a temporary bad mapping before removing it.
 
+**Redesigned 2026-08-11 — connected tubes + interactive Known Space
+builder (user feedback after using the shipped panel: too much always-
+visible citation text, and the four Known Space routes should be one
+buildable route, not four separate buttons).** `buildGammaTube` (the S5
+Orange Tube) is untouched; a new `buildMultiLegTube` in App.jsx calls it
+once per consecutive stop pair and concatenates the results (positions,
+colors, indices with running vertex-offsets, year-ring positions) into one
+geometry, reusing the existing `s.tubeMesh`/`s.tubeYearRings` objects — no
+new scene objects, so ship-view hiding and Travel-Time View's mutual
+exclusion both keep working unmodified. The tube-rebuild effect gained a
+precedence rule: a new `universeRouteStops` array (set the moment a
+universe is selected, or live-updated from Known Space's checklist) draws
+instead of the classic 2-star mission-brief pair while it's set — verified
+the classic pair still renders correctly with no universe selected
+(regression check, screenshot-confirmed).
+
+**The Project Hail Mary route was wrong in the original PR and the user
+caught it.** I'd shipped Tau Ceti alone, having verified only Rocky's own
+outbound leg (Eridani→Tau Ceti) and concluded there was no single-ship
+connection worth drawing. The user asked for Sun→Tau Ceti→Erid as one
+connected route; re-checked via WebSearch rather than trusting my first
+pass, and found the book's actual ending: Grace turns the Hail Mary around
+at the climax to rescue Rocky's dying ship and accompanies him home to
+Erid, where he stays (projecthailmary.fandom.com/wiki/Rocky, cross-checked
+against multiple ending-explainer sources). So it *is* one real character
+arc across three real stars — my first pass was incomplete research, not
+a case for refusing the connection; the user's memory of the book was
+right. Added Keid (40 Eridani A — IAU name confirmed via WebSearch,
+already present in the catalog) to the star mappings, replaced the single
+2-stop route with `Sun → Tau Cet → Keid`, citation explicit that it's two
+narrative legs (solo outbound, then the return with Rocky) not one
+unbroken flight path.
+
+**Known Space became an interactive route builder**: a checkbox + ▲/▼
+reorder per colony (plain array-swap on click, no drag-and-drop library —
+works identically on touch), live-deriving `universeRouteStops` as
+`[Sun, ...checked stops in list order]` on every change. Verified
+precisely (a first test pass gave a false failure from an imprecise DOM
+selector grabbing the wrong checkbox in headless testing, not an app bug
+— re-verified with an exact selector): unchecking Jinx excludes Sirius
+from the route without disturbing the other three; moving "We Made It" to
+the top changes the flown order to `Sun → Procyon → Rigil Kentaurus → Tau
+Cet`, confirmed via both the live tube preview (screenshot) and the actual
+`ROUTE ·` header text on departure.
+
+**Bug caught during this verification pass, unrelated to the redesign
+itself**: `nameFor()` only checked `cat.nameByIndex`, not
+`cat.desigByIndex` — any route through a designation-only star (Tau Ceti
+has no IAU proper name) rendered as `STAR #7118` in the route header and
+trip bar instead of `TAU CET`. Same class of gap as the `computeBoxSelect`
+fix earlier this session, just a different call site; fixed the same way.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

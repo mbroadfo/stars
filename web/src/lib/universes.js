@@ -29,7 +29,7 @@ export function resolveUniverses(cat, data) {
       const idx = resolveName(cat, s.realName);
       return { ...s, idx, resolved: idx !== null };
     }),
-    routes: u.routes.map((r) => {
+    routes: (u.routes ?? []).map((r) => {
       const stopIdx = r.stops.map((name) => resolveName(cat, name));
       return { ...r, stopIdx, resolved: stopIdx.every((i) => i !== null) };
     }),

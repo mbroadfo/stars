@@ -151,6 +151,26 @@ function buildGammaTube(from, to, D, accel) {
   return { positions, colors, indices, peakGamma, totalShipYears, yearRingPositions };
 }
 
+// Merges N-1 single-leg tubes (Universes routes) into one geometry —
+// buildGammaTube itself is untouched, this just concatenates its output
+// per consecutive pair with running vertex-index offsets.
+function buildMultiLegTube(stops, accel) {
+  const positions = [], colors = [], indices = [], yearRingPositions = [];
+  let vOffset = 0;
+  for (let i = 0; i < stops.length - 1; i++) {
+    const from = stops[i], to = stops[i + 1];
+    const D = from.distanceTo(to);
+    const leg = D > 1e-6 ? buildGammaTube(from, to, D, accel) : null;
+    if (!leg) continue;
+    positions.push(...leg.positions);
+    colors.push(...leg.colors);
+    for (const idx of leg.indices) indices.push(idx + vOffset);
+    yearRingPositions.push(...leg.yearRingPositions);
+    vOffset += leg.positions.length / 3;
+  }
+  return { positions, colors, indices, yearRingPositions };
+}
+
 export default function App() {
   const mountRef = useRef(null);
   const labelsRef = useRef(null);
@@ -192,14 +212,14 @@ export default function App() {
   // PLAN.md S4). years: signed offset from now, driven by real 6D velocities.
   const [years, setYears] = useState(0);
   const [yearsPlaying, setYearsPlaying] = useState(false);
-  const [timeOpen, setTimeOpen] = useState(true);
+  const [timeOpen, setTimeOpen] = useState(false);
 
   // Travel-Time View (S5 test 2) — a third atlas projection: radial distance
   // from the origin becomes ship-years to reach it at the current accel;
   // angle unchanged. Render-only (see honesty note at the shader) — atlas
   // view only, forced to 0 in ship view, same as the tube.
   const [travelMorph, setTravelMorph] = useState(0); // 0 = real space, 1 = fully morphed
-  const [travelOpen, setTravelOpen] = useState(true);
+  const [travelOpen, setTravelOpen] = useState(false);
 
   // The Infection Lab (S6) — a Project Hail Mary-style astrophage
   // percolation sim over real Tier 1 positions via a spatial neighbor grid
@@ -211,7 +231,7 @@ export default function App() {
   const [hopRangeLy, setHopRangeLy] = useState(8);       // ly — canonical astrophage range
   const [transmitChance, setTransmitChance] = useState(0.7);
   const [incubationYears, setIncubationYears] = useState(1);
-  const [infectionOpen, setInfectionOpen] = useState(true);
+  const [infectionOpen, setInfectionOpen] = useState(false);
   const [infectionPickArmed, setInfectionPickArmed] = useState(false);
   const [infectionSummary, setInfectionSummary] = useState(null); // {totalInfected,maxGeneration,maxEpoch,percolated}
   const [infectionEpoch, setInfectionEpoch] = useState(0);
@@ -220,9 +240,35 @@ export default function App() {
   // S6 Universes — curated sci-fi settings mapped onto real stars (see
   // lib/universes.js + data/universes.json). Resolved once per catalog
   // load; an unresolvable star mapping is flagged in the UI, never hidden.
-  const [universesOpen, setUniversesOpen] = useState(true);
+  const [universesOpen, setUniversesOpen] = useState(false);
   const [selectedUniverseId, setSelectedUniverseId] = useState(null);
   const universes = useMemo(() => (cat ? resolveUniverses(cat, universesData) : []), [cat]);
+  // Drives the atlas-view tube preview (see the tube-rebuild effect below)
+  // — an ordered array of resolved catalog indices for whichever universe
+  // route is currently configured, or null when none is. Takes precedence
+  // over the classic 2-star mission-brief tube while set.
+  const [universeRouteStops, setUniverseRouteStops] = useState(null);
+  // Known Space's interactive route builder: check which colonies to
+  // visit, reorder with the ▲▼ buttons — array order IS visit order.
+  const [ksOrder, setKsOrder] = useState([]);
+  useEffect(() => {
+    const ks = universes.find((u) => u.id === "known-space");
+    if (ks) setKsOrder(ks.stars.map((s) => ({ ...s, checked: true })));
+  }, [universes]);
+  // Single source of truth for both the tube preview and the "Fly this
+  // route" button — Known Space derives it live from the checklist above,
+  // any other universe just uses its one authored route.
+  useEffect(() => {
+    if (!selectedUniverseId) { setUniverseRouteStops(null); return; }
+    if (selectedUniverseId === "known-space") {
+      const checked = ksOrder.filter((s) => s.checked && s.resolved).map((s) => s.idx);
+      setUniverseRouteStops(checked.length > 0 ? [SUN_IDX, ...checked] : null);
+      return;
+    }
+    const u = universes.find((x) => x.id === selectedUniverseId);
+    const r = u?.routes?.[0];
+    setUniverseRouteStops(r?.resolved ? r.stopIdx : null);
+  }, [selectedUniverseId, ksOrder, universes]);
 
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
@@ -307,7 +353,7 @@ export default function App() {
         cat.data[o + 2] + cat.data[o + 5] * yrs * KMS_TO_LYYR,
       );
     };
-    const nameFor = (idx) => (idx == null || idx === SUN_IDX) ? "Sun" : (cat.nameByIndex.get(idx)?.name ?? `Star #${idx}`);
+    const nameFor = (idx) => (idx == null || idx === SUN_IDX) ? "Sun" : (cat.nameByIndex.get(idx)?.name ?? cat.desigByIndex?.get(idx) ?? `Star #${idx}`);
     s.effYears = 0; // combined epoch — base scrub epoch + Earth-time elapsed on any active trip; see animate()
     s.enterShip = (idx, originIdx = null) => {
       s.targetIdx = idx;
@@ -1467,30 +1513,43 @@ export default function App() {
     } else s.tether.visible = false;
   }, [selected, cat, years]);
 
-  // Rebuild the Orange Tube (S5 test 1) whenever the mission-brief pair or
-  // accel changes. Atlas view only — a pre-flight comparison tool, not meant
-  // to clutter first-person ship view.
+  // Rebuild the Orange Tube (S5 test 1) whenever the mission-brief pair,
+  // a Universes route preview, or accel changes. Atlas view only — a
+  // pre-flight comparison tool, not meant to clutter first-person ship
+  // view. A Universes route (universeRouteStops, ≥2 resolved stops) takes
+  // precedence over the classic 2-star pair while it's set — merging N-1
+  // legs via buildMultiLegTube instead of a single buildGammaTube call.
   useEffect(() => {
     const s = stateRef.current;
     if (!s.tubeMesh || !cat) return;
-    if (shipView || selected.length === 0) {
+    const hasRoute = universeRouteStops && universeRouteStops.length >= 2;
+    if (shipView || (!hasRoute && selected.length === 0)) {
       s.tubeMesh.visible = false;
       if (s.tubeYearRings) s.tubeYearRings.visible = false;
       return;
     }
     const yrs = years;
-    const endA = advanceStar(getStarOrSun(cat, selected[0]), yrs);
-    const from = selected.length === 2 ? new THREE.Vector3(endA.x, endA.y, endA.z) : new THREE.Vector3(0, 0, 0);
-    let to;
-    if (selected.length === 2) {
-      const endB = advanceStar(getStarOrSun(cat, selected[1]), yrs);
-      to = new THREE.Vector3(endB.x, endB.y, endB.z);
+    let built;
+    if (hasRoute) {
+      const stops = universeRouteStops.map((idx) => {
+        const st = advanceStar(getStarOrSun(cat, idx), yrs);
+        return new THREE.Vector3(st.x, st.y, st.z);
+      });
+      built = buildMultiLegTube(stops, accel);
     } else {
-      to = new THREE.Vector3(endA.x, endA.y, endA.z);
+      const endA = advanceStar(getStarOrSun(cat, selected[0]), yrs);
+      const from = selected.length === 2 ? new THREE.Vector3(endA.x, endA.y, endA.z) : new THREE.Vector3(0, 0, 0);
+      let to;
+      if (selected.length === 2) {
+        const endB = advanceStar(getStarOrSun(cat, selected[1]), yrs);
+        to = new THREE.Vector3(endB.x, endB.y, endB.z);
+      } else {
+        to = new THREE.Vector3(endA.x, endA.y, endA.z);
+      }
+      const D = from.distanceTo(to);
+      built = D > 1e-6 ? buildGammaTube(from, to, D, accel) : null;
     }
-    const D = from.distanceTo(to);
-    const built = D > 1e-6 ? buildGammaTube(from, to, D, accel) : null;
-    if (!built) {
+    if (!built || built.positions.length === 0) {
       s.tubeMesh.visible = false;
       if (s.tubeYearRings) s.tubeYearRings.visible = false;
       return;
@@ -1511,7 +1570,7 @@ export default function App() {
         s.tubeYearRings.visible = false; // trip under 1 ship-year — no whole-year mark to show
       }
     }
-  }, [selected, cat, years, accel, shipView]);
+  }, [selected, cat, years, accel, shipView, universeRouteStops]);
 
   // ---------------- Derived measurements ----------------
   // Combined epoch (S4.6): base scrub epoch + Earth-time elapsed on an
@@ -2136,30 +2195,45 @@ export default function App() {
                 </div>
                 {universes.filter((u) => u.id === selectedUniverseId).map((u) => (
                   <div key={u.id}>
-                    <div style={{ ...mono, fontSize: 9.5, color: "#8fa0c0", marginTop: 8, lineHeight: 1.5 }}>
+                    <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 6, lineHeight: 1.4 }}>
                       {u.author} — {u.blurb}
                     </div>
-                    <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginTop: 8 }}>star mappings</div>
-                    {u.stars.map((s) => (
-                      <div key={s.fictionalName} style={{ marginTop: 4 }}>
-                        <div style={{ ...mono, fontSize: 10.5, color: s.resolved ? "#dfe6f2" : "#e8a07a" }}>
+                    {u.id === "known-space" ? (
+                      ksOrder.map((s, i) => (
+                        <div key={s.fictionalName} title={s.citation}
+                          style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4 }}>
+                          <input type="checkbox" checked={s.checked}
+                            onChange={() => setKsOrder((arr) => arr.map((x, j) => (j === i ? { ...x, checked: !x.checked } : x)))}
+                            style={{ accentColor: AMBER }} />
+                          <span style={{ ...mono, fontSize: 10.5, flex: 1, color: s.resolved ? (s.checked ? "#dfe6f2" : "#5a6a8f") : "#e8a07a" }}>
+                            {s.fictionalName} → {s.resolved ? s.realName : "unresolved ⚠"}
+                          </span>
+                          <button disabled={i === 0}
+                            onClick={() => setKsOrder((arr) => { const c = [...arr]; [c[i - 1], c[i]] = [c[i], c[i - 1]]; return c; })}
+                            style={{ ...mono, fontSize: 9, padding: "1px 5px", background: "none", border: "1px solid rgba(143,165,216,0.3)", color: "#aebde0", borderRadius: 3, cursor: i === 0 ? "default" : "pointer", opacity: i === 0 ? 0.3 : 1 }}>▲</button>
+                          <button disabled={i === ksOrder.length - 1}
+                            onClick={() => setKsOrder((arr) => { const c = [...arr]; [c[i], c[i + 1]] = [c[i + 1], c[i]]; return c; })}
+                            style={{ ...mono, fontSize: 9, padding: "1px 5px", background: "none", border: "1px solid rgba(143,165,216,0.3)", color: "#aebde0", borderRadius: 3, cursor: i === ksOrder.length - 1 ? "default" : "pointer", opacity: i === ksOrder.length - 1 ? 0.3 : 1 }}>▼</button>
+                        </div>
+                      ))
+                    ) : (
+                      u.stars.map((s) => (
+                        <div key={s.fictionalName} title={s.citation}
+                          style={{ ...mono, fontSize: 10.5, marginTop: 4, color: s.resolved ? "#dfe6f2" : "#e8a07a" }}>
                           {s.fictionalName} → {s.resolved ? s.realName : "unresolved ⚠"}
                         </div>
-                        <div style={{ ...mono, fontSize: 8.5, color: "#5a6a8f", lineHeight: 1.4 }}>{s.citation}</div>
-                      </div>
-                    ))}
-                    <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginTop: 8 }}>routes</div>
-                    {u.routes.map((r) => (
-                      <button key={r.id} disabled={!r.resolved}
-                        title={r.citation}
-                        onClick={() => stateRef.current.startRoute?.(r.stopIdx)}
-                        style={{ ...mono, fontSize: 10, width: "100%", textAlign: "left", padding: "5px 8px", marginTop: 4, borderRadius: 4,
-                          cursor: r.resolved ? "pointer" : "default",
-                          background: "rgba(232,180,90,0.08)", border: `1px solid rgba(232,180,90,${r.resolved ? 0.35 : 0.15})`,
-                          color: r.resolved ? "#e8c88a" : "#5a6a8f" }}>
-                        {r.resolved ? "▶ " : "⚠ "}{r.title}
-                      </button>
-                    ))}
+                      ))
+                    )}
+                    <button disabled={!universeRouteStops || universeRouteStops.length < 2}
+                      title={u.routes?.[0]?.citation}
+                      onClick={() => stateRef.current.startRoute?.(universeRouteStops)}
+                      style={{ ...mono, fontSize: 10.5, width: "100%", padding: "6px 0", marginTop: 8, borderRadius: 4,
+                        cursor: universeRouteStops ? "pointer" : "default",
+                        background: universeRouteStops ? "rgba(232,180,90,0.22)" : "rgba(255,255,255,0.04)",
+                        border: `1px solid rgba(232,180,90,${universeRouteStops ? 0.7 : 0.15})`,
+                        color: universeRouteStops ? "#f0d9a8" : "#4a5570" }}>
+                      ▶ Fly this route
+                    </button>
                   </div>
                 ))}
               </>

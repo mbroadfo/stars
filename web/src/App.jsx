@@ -200,6 +200,7 @@ export default function App() {
   const [skyMode, setSkyMode] = useState("all");   // all | eye | gate
   const [gateLy, setGateLy] = useState(100);
   const [navOpen, setNavOpen] = useState(true);
+  const [railOpen, setRailOpen] = useState(true); // right-rail master collapse, mirrors the left hamburger
   const [secs, setSecs] = useState({ atlas: true, box: true, origin: true, dest: true, brief: true });
   const [viewOpen, setViewOpen] = useState(true);
   const [tripOpen, setTripOpen] = useState(true);
@@ -1972,8 +1973,14 @@ export default function App() {
       </div>
       )}
 
-      {/* Right action rail — persistent controls, always visible regardless of console scroll state */}
-      <div style={{ position: "absolute", top: 14, right: 14, width: 196, display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Right action rail — persistent controls, always visible regardless of console scroll state.
+          Gear button mirrors the left hamburger: collapses the whole rail to one icon. */}
+      <button onClick={() => setRailOpen((v) => !v)} title={railOpen ? "collapse controls" : "open controls"}
+        style={{ position: "absolute", top: 14, right: 14, ...panel, ...mono, fontSize: 16, padding: "7px 12px", color: AMBER, cursor: "pointer", zIndex: 6 }}>
+        ⚙
+      </button>
+      {railOpen && (
+      <div style={{ position: "absolute", top: 54, right: 14, width: 196, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ ...panel, padding: "9px 10px" }}>
           <div onClick={() => setViewOpen((v) => !v)}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: viewOpen ? 7 : 0 }}>
@@ -2317,6 +2324,7 @@ export default function App() {
           </div>
         )}
       </div>
+      )}
 
       {/* Help — centered overlay, first run only */}
       {showHelp && (

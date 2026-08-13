@@ -692,6 +692,53 @@ of the sky (camera distance 60→2.5 ly, framing swapped from Sirius/Orion
 to Arcturus/Spica), clicked Reset view — camera distance read back 59.9 ly
 and the screenshot is pixel-equivalent to the startup frame.
 
+**Added 2026-08-13 — Universes routes are now fully extensible.** User:
+"if you don't pick a universe, you can just start adding stars and
+creating a custom journey" — same ask for adding to Known Space and
+Project Hail Mary's routes, not just picking from four fixed presets.
+Generalized Known Space's checkbox+reorder list (`ksOrder`, previously
+Known-Space-only) into a single always-in-scope `routeStops` state: a
+universe button now just loads its canon stars into that list as a
+starting point (replacing whatever was there; clicking it again while
+active clears back to blank/custom) rather than gating a route builder
+behind having picked one. `universeRouteStops`'s derivation collapsed to
+one case — every universe and the from-scratch custom route all go
+through the identical live-editable list now, no more per-universe
+branching. Project Hail Mary's route becomes genuinely editable for the
+first time (previously a static, non-interactive 2-stop display). Adding
+a stop reuses the Infection Lab's exact search/click-on-map pattern
+rather than duplicating it: the single-purpose `infectionPickArmed`
+boolean became a shared `pickMode` (`null | "infection" | "routeAdd"`),
+so arming one picker implicitly disarms the other by construction (a
+single string value can't be two things at once) — same `onUp` dispatch,
+one more branch. Each row gained a ✕ remove button alongside the existing
+checkbox/▲▼ (needed for dropping an added star you change your mind
+about; harmless on canon rows too — customizing is the whole point).
+
+**Bug fix along the way**: `patientZeroName` (Infection Lab's display of
+the current patient zero) used `getStarOrSun(cat, idx).name ?? "unnamed
+star"` — no designation fallback, so picking a designation-only star like
+Tau Ceti as patient zero rendered "unnamed star" instead of "Tau Cet".
+Same class of gap as the `nameFor`/`computeBoxSelect` fixes earlier this
+session, just not yet caught at this call site. Extracted the fix as a
+shared, module-level `resolveStarName(cat, idx)` (nameByIndex → desigByIndex
+→ `Star #N` → fallback), since the scene-setup effect's own `nameFor` had
+the correct logic already but was closure-local and unreachable from the
+render body where `patientZeroName` and the new added-stop names live.
+
+**Verified**: built a fully custom 2-star route (Sirius, Betelgeuse) with
+no universe ever clicked, flew it, route header read `SUN → SIRIUS →
+BETELGEUSE`. Known Space: added a 5th star (Vega) via search, removed
+Jinx via ✕, flew — header read `SUN → RIGIL KENTAURUS → PROCYON → TAU CET
+→ VEGA`, Sirius correctly absent, Vega correctly appended in add-order.
+Project Hail Mary: added Sirius via click-on-map, flew — 3 legs, `SUN →
+TAU CET → KEID → SIRIUS`. Confirmed arming route-add pick mode visibly
+disarms an already-armed Infection Lab pick mode and vice versa. Confirmed
+the `patientZeroName` fix directly: picking Tau Ceti now reads "● Tau
+Cet," not "● unnamed star." No console/page errors across select universe
+→ edit (add/remove/reorder/uncheck) → deselect (list clears) → build
+fully custom route → fly.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

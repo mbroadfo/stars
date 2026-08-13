@@ -20,6 +20,13 @@ const ICE = "#8fd3ff";
 const PICK_MAG_LIMIT = 3.0; // unnamed stars brighter than this are still pickable
 const sunStar = () => ({ i: SUN_IDX, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ly: 0, rv: 0, name: "Sun" });
 const getStarOrSun = (cat, idx) => (idx === SUN_IDX ? sunStar() : getStar(cat, idx));
+// Display name for any catalog index, including designation-only stars
+// (e.g. Tau Ceti has no IAU proper name) — nameByIndex first, then
+// desigByIndex, matching the same fallback chain used for pick()/labels
+// elsewhere. Shared between the scene-setup effect (as `nameFor`) and the
+// render body, which has no access to that effect's closure.
+const resolveStarName = (cat, idx) =>
+  (idx == null || idx === SUN_IDX) ? "Sun" : (cat.nameByIndex.get(idx)?.name ?? cat.desigByIndex?.get(idx) ?? `Star #${idx}`);
 // Matches a typed query against a stored Bayer/Flamsteed designation like
 // "Tau Cet" — per-token, bidirectional prefix (the stored form uses the
 // 3-letter IAU constellation abbreviation, but people type the genitive,
@@ -185,6 +192,11 @@ export default function App() {
   const [loadError, setLoadError] = useState(null);
   const [selected, setSelected] = useState([]); // star indices, max 2
   const [hovered, setHovered] = useState(null);
+  // Shared "next click on a star feeds into X instead of normal selection"
+  // dispatch — armed by the Infection Lab's patient-zero picker and the
+  // Universes route builder's add-a-stop picker; a string so arming one
+  // implicitly disarms the other (see onUp below).
+  const [pickMode, setPickMode] = useState(null); // null | "infection" | "routeAdd"
   const [accel, setAccel] = useState(1);
   const [camDist, setCamDist] = useState(60);
   const [fps, setFps] = useState(0);
@@ -239,7 +251,6 @@ export default function App() {
   const [transmitChance, setTransmitChance] = useState(0.7);
   const [incubationYears, setIncubationYears] = useState(1);
   const [infectionOpen, setInfectionOpen] = useState(false);
-  const [infectionPickArmed, setInfectionPickArmed] = useState(false);
   const [infectionSummary, setInfectionSummary] = useState(null); // {totalInfected,maxGeneration,maxEpoch,percolated}
   const [infectionEpoch, setInfectionEpoch] = useState(0);
   const [infectionEpochPlaying, setInfectionEpochPlaying] = useState(false);
@@ -251,31 +262,25 @@ export default function App() {
   const [selectedUniverseId, setSelectedUniverseId] = useState(null);
   const universes = useMemo(() => (cat ? resolveUniverses(cat, universesData) : []), [cat]);
   // Drives the atlas-view tube preview (see the tube-rebuild effect below)
-  // — an ordered array of resolved catalog indices for whichever universe
-  // route is currently configured, or null when none is. Takes precedence
-  // over the classic 2-star mission-brief tube while set.
+  // — an ordered array of resolved catalog indices for the current route,
+  // or null when there isn't one. Takes precedence over the classic 2-star
+  // mission-brief tube while set.
   const [universeRouteStops, setUniverseRouteStops] = useState(null);
-  // Known Space's interactive route builder: check which colonies to
-  // visit, reorder with the ▲▼ buttons — array order IS visit order.
-  const [ksOrder, setKsOrder] = useState([]);
-  useEffect(() => {
-    const ks = universes.find((u) => u.id === "known-space");
-    if (ks) setKsOrder(ks.stars.map((s) => ({ ...s, checked: true })));
-  }, [universes]);
+  // The route builder's editable stop list — always in scope, not gated
+  // behind picking a universe. A universe button loads its canon stars in
+  // here as a starting point (replacing whatever was there); with no
+  // universe active it's just whatever's been searched/clicked in, a
+  // fully custom route. Every row (canon or added) gets the same
+  // checkbox/reorder/remove controls — see the UNIVERSES panel JSX.
+  const [routeStops, setRouteStops] = useState([]);
   // Single source of truth for both the tube preview and the "Fly this
-  // route" button — Known Space derives it live from the checklist above,
-  // any other universe just uses its one authored route.
+  // route" button — always derived from the live-editable list above, so
+  // Known Space, Project Hail Mary, and a from-scratch custom route all
+  // go through the exact same path.
   useEffect(() => {
-    if (!selectedUniverseId) { setUniverseRouteStops(null); return; }
-    if (selectedUniverseId === "known-space") {
-      const checked = ksOrder.filter((s) => s.checked && s.resolved).map((s) => s.idx);
-      setUniverseRouteStops(checked.length > 0 ? [SUN_IDX, ...checked] : null);
-      return;
-    }
-    const u = universes.find((x) => x.id === selectedUniverseId);
-    const r = u?.routes?.[0];
-    setUniverseRouteStops(r?.resolved ? r.stopIdx : null);
-  }, [selectedUniverseId, ksOrder, universes]);
+    const checked = routeStops.filter((s) => s.checked && s.resolved).map((s) => s.idx);
+    setUniverseRouteStops(checked.length > 0 ? [SUN_IDX, ...checked] : null);
+  }, [routeStops]);
 
   // animate() lives in a closure — mirror UI choices into the ref
   useEffect(() => { stateRef.current.accel = accel; }, [accel]);
@@ -290,7 +295,7 @@ export default function App() {
   useEffect(() => { stateRef.current.hopRangeLy = hopRangeLy; }, [hopRangeLy]);
   useEffect(() => { stateRef.current.transmitChance = transmitChance; }, [transmitChance]);
   useEffect(() => { stateRef.current.incubationYears = incubationYears; }, [incubationYears]);
-  useEffect(() => { stateRef.current.infectionPickArmed = infectionPickArmed; }, [infectionPickArmed]);
+  useEffect(() => { stateRef.current.pickMode = pickMode; }, [pickMode]);
   useEffect(() => { stateRef.current.infectionEpoch = infectionEpoch; }, [infectionEpoch]);
 
   // shared by 3D click-picking and the box-select results list: fills the
@@ -370,7 +375,7 @@ export default function App() {
         cat.data[o + 2] + cat.data[o + 5] * yrs * KMS_TO_LYYR,
       );
     };
-    const nameFor = (idx) => (idx == null || idx === SUN_IDX) ? "Sun" : (cat.nameByIndex.get(idx)?.name ?? cat.desigByIndex?.get(idx) ?? `Star #${idx}`);
+    const nameFor = (idx) => resolveStarName(cat, idx);
     s.effYears = 0; // combined epoch — base scrub epoch + Earth-time elapsed on any active trip; see animate()
     s.enterShip = (idx, originIdx = null) => {
       s.targetIdx = idx;
@@ -491,8 +496,20 @@ export default function App() {
     // epoch scrub's imperative setters — same shape as setYears/
     // setYearsPlaying above, on the independent infection-epoch axis.
     s.setPatientZero = (idx) => {
-      s.infectionPickArmed = false; setInfectionPickArmed(false);
+      s.pickMode = null; setPickMode(null);
       setPatientZero(idx);
+    };
+    // Universes route builder: append a stop (search or click-on-map).
+    // Skips the Sun (already the implicit first stop of every route) and
+    // duplicates (re-picking an already-listed star is a no-op, not an
+    // error — simplest way to avoid a confusing duplicate-leg route).
+    s.addRouteStop = (idx) => {
+      s.pickMode = null; setPickMode(null);
+      if (idx === SUN_IDX) return;
+      setRouteStops((stops) => {
+        if (stops.some((st) => st.idx === idx)) return stops;
+        return [...stops, { idx, realName: resolveStarName(cat, idx), checked: true, resolved: true }];
+      });
     };
     s.setInfectionEpoch = (e) => {
       const max = s.infectionRun?.maxEpoch ?? 0;
@@ -1111,7 +1128,8 @@ export default function App() {
       if (drag && moved < 6 && drag.btn === 0) {
         const hit = pick(e.clientX, e.clientY);
         if (hit != null) {
-          if (s.infectionPickArmed) s.setPatientZero?.(hit);
+          if (s.pickMode === "infection") s.setPatientZero?.(hit);
+          else if (s.pickMode === "routeAdd") s.addRouteStop?.(hit);
           else selectStar(hit);
         }
       } else if (drag && s.boxSelect && s.mode !== "ship" && drag.btn === 0 && !drag.shift) {
@@ -1644,7 +1662,7 @@ export default function App() {
   const infectionGenNow = infectionRun
     ? Math.min(infectionRun.maxGeneration, Math.floor(infectionEpoch / infectionRun.incubationYears))
     : 0;
-  const patientZeroName = cat && patientZero != null ? getStarOrSun(cat, patientZero).name ?? "unnamed star" : null;
+  const patientZeroName = cat && patientZero != null ? resolveStarName(cat, patientZero) : null;
 
   const hoveredStar = cat && hovered != null ? advanceStar(getStar(cat, hovered), effectiveYears) : null;
 
@@ -2145,14 +2163,14 @@ export default function App() {
                   <div style={{ flex: 1 }}>
                     <StarSearch placeholder={patientZeroName ?? "search stars… (or “Sun”)"} onPick={(idx) => stateRef.current.setPatientZero?.(idx)} allowSun />
                   </div>
-                  <button onClick={() => setInfectionPickArmed((v) => !v)} title="click a star on the map"
+                  <button onClick={() => setPickMode((m) => (m === "infection" ? null : "infection"))} title="click a star on the map"
                     style={{ ...mono, fontSize: 10, padding: "5px 8px", borderRadius: 4, cursor: "pointer", marginTop: 6,
-                      background: infectionPickArmed ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
-                      border: `1px solid rgba(232,180,90,${infectionPickArmed ? 0.7 : 0.3})`, color: "#e8c88a" }}>
+                      background: pickMode === "infection" ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
+                      border: `1px solid rgba(232,180,90,${pickMode === "infection" ? 0.7 : 0.3})`, color: "#e8c88a" }}>
                     ⌖
                   </button>
                 </div>
-                {infectionPickArmed && (
+                {pickMode === "infection" && (
                   <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 4 }}>click any star to set patient zero</div>
                 )}
                 {patientZeroName && (
@@ -2233,7 +2251,16 @@ export default function App() {
               <>
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                   {universes.map((u) => (
-                    <button key={u.id} onClick={() => setSelectedUniverseId(u.id === selectedUniverseId ? null : u.id)}
+                    <button key={u.id}
+                      onClick={() => {
+                        if (u.id === selectedUniverseId) {
+                          setSelectedUniverseId(null);
+                          setRouteStops([]);
+                        } else {
+                          setSelectedUniverseId(u.id);
+                          setRouteStops(u.stars.map((s) => ({ ...s, checked: true })));
+                        }
+                      }}
                       style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
                         background: selectedUniverseId === u.id ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.1)",
                         border: `1px solid rgba(232,180,90,${selectedUniverseId === u.id ? 0.7 : 0.35})`, color: "#e8c88a" }}>
@@ -2241,49 +2268,62 @@ export default function App() {
                     </button>
                   ))}
                 </div>
-                {universes.filter((u) => u.id === selectedUniverseId).map((u) => (
-                  <div key={u.id}>
-                    <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 6, lineHeight: 1.4 }}>
-                      {u.author} — {u.blurb}
-                    </div>
-                    {u.id === "known-space" ? (
-                      ksOrder.map((s, i) => (
-                        <div key={s.fictionalName} title={s.citation}
-                          style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4 }}>
-                          <input type="checkbox" checked={s.checked}
-                            onChange={() => setKsOrder((arr) => arr.map((x, j) => (j === i ? { ...x, checked: !x.checked } : x)))}
-                            style={{ accentColor: AMBER }} />
-                          <span style={{ ...mono, fontSize: 10.5, flex: 1, color: s.resolved ? (s.checked ? "#dfe6f2" : "#5a6a8f") : "#e8a07a" }}>
-                            {s.fictionalName} → {s.resolved ? s.realName : "unresolved ⚠"}
-                          </span>
-                          <button disabled={i === 0}
-                            onClick={() => setKsOrder((arr) => { const c = [...arr]; [c[i - 1], c[i]] = [c[i], c[i - 1]]; return c; })}
-                            style={{ ...mono, fontSize: 9, padding: "1px 5px", background: "none", border: "1px solid rgba(143,165,216,0.3)", color: "#aebde0", borderRadius: 3, cursor: i === 0 ? "default" : "pointer", opacity: i === 0 ? 0.3 : 1 }}>▲</button>
-                          <button disabled={i === ksOrder.length - 1}
-                            onClick={() => setKsOrder((arr) => { const c = [...arr]; [c[i], c[i + 1]] = [c[i + 1], c[i]]; return c; })}
-                            style={{ ...mono, fontSize: 9, padding: "1px 5px", background: "none", border: "1px solid rgba(143,165,216,0.3)", color: "#aebde0", borderRadius: 3, cursor: i === ksOrder.length - 1 ? "default" : "pointer", opacity: i === ksOrder.length - 1 ? 0.3 : 1 }}>▼</button>
-                        </div>
-                      ))
-                    ) : (
-                      u.stars.map((s) => (
-                        <div key={s.fictionalName} title={s.citation}
-                          style={{ ...mono, fontSize: 10.5, marginTop: 4, color: s.resolved ? "#dfe6f2" : "#e8a07a" }}>
-                          {s.fictionalName} → {s.resolved ? s.realName : "unresolved ⚠"}
-                        </div>
-                      ))
-                    )}
-                    <button disabled={!universeRouteStops || universeRouteStops.length < 2}
-                      title={u.routes?.[0]?.citation}
-                      onClick={() => stateRef.current.startRoute?.(universeRouteStops)}
-                      style={{ ...mono, fontSize: 10.5, width: "100%", padding: "6px 0", marginTop: 8, borderRadius: 4,
-                        cursor: universeRouteStops ? "pointer" : "default",
-                        background: universeRouteStops ? "rgba(232,180,90,0.22)" : "rgba(255,255,255,0.04)",
-                        border: `1px solid rgba(232,180,90,${universeRouteStops ? 0.7 : 0.15})`,
-                        color: universeRouteStops ? "#f0d9a8" : "#4a5570" }}>
-                      ▶ Fly this route
-                    </button>
+                {selectedUniverseId && universes.find((u) => u.id === selectedUniverseId) && (
+                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 6, lineHeight: 1.4 }}>
+                    {universes.find((u) => u.id === selectedUniverseId).author} — {universes.find((u) => u.id === selectedUniverseId).blurb}
                   </div>
-                ))}
+                )}
+
+                {routeStops.length === 0 ? (
+                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 8 }}>
+                    no stops yet — pick a universe above, or search/click a star below to build a custom route
+                  </div>
+                ) : (
+                  routeStops.map((s, i) => (
+                    <div key={s.idx} title={s.citation}
+                      style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 4 }}>
+                      <input type="checkbox" checked={s.checked}
+                        onChange={() => setRouteStops((arr) => arr.map((x, j) => (j === i ? { ...x, checked: !x.checked } : x)))}
+                        style={{ accentColor: AMBER }} />
+                      <span style={{ ...mono, fontSize: 10.5, flex: 1, color: s.resolved ? (s.checked ? "#dfe6f2" : "#5a6a8f") : "#e8a07a" }}>
+                        {s.fictionalName ? `${s.fictionalName} → ` : ""}{s.resolved ? s.realName : "unresolved ⚠"}
+                      </span>
+                      <button disabled={i === 0}
+                        onClick={() => setRouteStops((arr) => { const c = [...arr]; [c[i - 1], c[i]] = [c[i], c[i - 1]]; return c; })}
+                        style={{ ...mono, fontSize: 9, padding: "1px 5px", background: "none", border: "1px solid rgba(143,165,216,0.3)", color: "#aebde0", borderRadius: 3, cursor: i === 0 ? "default" : "pointer", opacity: i === 0 ? 0.3 : 1 }}>▲</button>
+                      <button disabled={i === routeStops.length - 1}
+                        onClick={() => setRouteStops((arr) => { const c = [...arr]; [c[i], c[i + 1]] = [c[i + 1], c[i]]; return c; })}
+                        style={{ ...mono, fontSize: 9, padding: "1px 5px", background: "none", border: "1px solid rgba(143,165,216,0.3)", color: "#aebde0", borderRadius: 3, cursor: i === routeStops.length - 1 ? "default" : "pointer", opacity: i === routeStops.length - 1 ? 0.3 : 1 }}>▼</button>
+                      <button onClick={() => setRouteStops((arr) => arr.filter((_, j) => j !== i))} title="remove"
+                        style={{ ...mono, fontSize: 9, padding: "1px 5px", background: "none", border: "1px solid rgba(232,140,120,0.35)", color: "#e0a090", borderRadius: 3, cursor: "pointer" }}>✕</button>
+                    </div>
+                  ))
+                )}
+
+                <div style={{ display: "flex", gap: 5, alignItems: "center", marginTop: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <StarSearch placeholder="add a star…" onPick={(idx) => stateRef.current.addRouteStop?.(idx)} allowSun={false} />
+                  </div>
+                  <button onClick={() => setPickMode((m) => (m === "routeAdd" ? null : "routeAdd"))} title="click a star on the map to add it"
+                    style={{ ...mono, fontSize: 10, padding: "5px 8px", borderRadius: 4, cursor: "pointer", marginTop: 6,
+                      background: pickMode === "routeAdd" ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.06)",
+                      border: `1px solid rgba(232,180,90,${pickMode === "routeAdd" ? 0.7 : 0.3})`, color: "#e8c88a" }}>
+                    ⌖
+                  </button>
+                </div>
+                {pickMode === "routeAdd" && (
+                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 4 }}>click any star to add it to the route</div>
+                )}
+
+                <button disabled={!universeRouteStops || universeRouteStops.length < 2}
+                  onClick={() => stateRef.current.startRoute?.(universeRouteStops)}
+                  style={{ ...mono, fontSize: 10.5, width: "100%", padding: "6px 0", marginTop: 8, borderRadius: 4,
+                    cursor: universeRouteStops ? "pointer" : "default",
+                    background: universeRouteStops ? "rgba(232,180,90,0.22)" : "rgba(255,255,255,0.04)",
+                    border: `1px solid rgba(232,180,90,${universeRouteStops ? 0.7 : 0.15})`,
+                    color: universeRouteStops ? "#f0d9a8" : "#4a5570" }}>
+                  ▶ Fly this route
+                </button>
               </>
             )}
           </div>

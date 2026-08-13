@@ -33,6 +33,12 @@ const KMS_TO_LYYR = 1 / C_KMS; // km/s -> ly/yr, for time-scrub position displac
 const YEARS_PER_SEC = 2500;    // playback rate: a full ±100k sweep takes 80s
 const YEARS_MAX = 100000;
 const INFECTION_YEARS_PER_SEC = 20; // Infection Lab epoch scrub pacing — a ~100 yr run plays in ~5s
+// The startup atlas camera pose — also the "Reset view" target, so panning/
+// zooming/orbiting away (or landing somewhere after a trip) always has a
+// single well-known way back, not just a re-center-without-re-angling.
+const DEFAULT_RADIUS = 60;
+const DEFAULT_THETA = Math.PI * 0.35;
+const DEFAULT_PHI = Math.PI * 0.38;
 
 // The Orange Tube (S5 test 1): a swept-circle mesh along the straight line
 // from `from` to `to`, radius at each point an ILLUSTRATIVE function of
@@ -301,7 +307,10 @@ export default function App() {
     loadCatalog().then(setCat).catch((e) => setLoadError(String(e)));
   }, []);
 
-  const flyTo = useCallback((targetVec, radius) => {
+  // `angles` ({theta, phi}) is optional — omit to recenter/rezoom without
+  // touching the current orbit angle (the existing zoom-preset behavior);
+  // pass it (as resetView does) to also ease the viewing angle back.
+  const flyTo = useCallback((targetVec, radius, angles) => {
     const s = stateRef.current;
     if (!s.camera) return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -312,8 +321,15 @@ export default function App() {
       toTarget: targetVec.clone(),
       fromRadius: s.radius,
       toRadius: radius,
+      fromTheta: s.theta,
+      toTheta: angles ? angles.theta : s.theta,
+      fromPhi: s.phi,
+      toPhi: angles ? angles.phi : s.phi,
     };
   }, []);
+  const resetView = useCallback(() => {
+    flyTo(new THREE.Vector3(0, 0, 0), DEFAULT_RADIUS, { theta: DEFAULT_THETA, phi: DEFAULT_PHI });
+  }, [flyTo]);
 
   // ---------------- Three.js scene ----------------
   useEffect(() => {
@@ -329,9 +345,9 @@ export default function App() {
 
     // Orbit state (SketchUp-style)
     s.target = new THREE.Vector3(0, 0, 0);
-    s.radius = 60;
-    s.theta = Math.PI * 0.35; // azimuth
-    s.phi = Math.PI * 0.38;   // polar
+    s.radius = DEFAULT_RADIUS;
+    s.theta = DEFAULT_THETA; // azimuth
+    s.phi = DEFAULT_PHI;     // polar
     s.camera = camera;
     s.renderer = renderer;
 
@@ -1259,6 +1275,8 @@ export default function App() {
         const k = easeInOut(Math.min(1, f.t));
         s.target.lerpVectors(f.fromTarget, f.toTarget, k);
         s.radius = f.fromRadius * Math.pow(f.toRadius / f.fromRadius, k);
+        s.theta = f.fromTheta + (f.toTheta - f.fromTheta) * k;
+        s.phi = f.fromPhi + (f.toPhi - f.fromPhi) * k;
         if (f.t >= 1) s.flyAnim = null;
       }
 
@@ -1998,6 +2016,13 @@ export default function App() {
                     {label}
                   </button>
                 ))}
+                {!shipView && (
+                  <button onClick={resetView} title="recenter on the Sun at the startup zoom and angle"
+                    style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                      background: "rgba(232,180,90,0.1)", border: "1px solid rgba(232,180,90,0.35)", color: "#e8c88a" }}>
+                    ↺ Reset view
+                  </button>
+                )}
                 <button onClick={() => setShowLines(!showLines)}
                   style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
                     background: showLines ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",

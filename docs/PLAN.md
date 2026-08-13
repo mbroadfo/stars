@@ -662,6 +662,17 @@ finger drag left the view unchanged; after, the same drag swings Orion off
 to the left edge and brings Capella/Auriga to center (yaw), and a second
 drag correctly tilts the view (pitch) — both screenshot-confirmed.
 
+**Added 2026-08-12 — right-rail collapse toggle.** A gear (⚙) button at
+top-right mirrors the left console's hamburger (☰): collapses the entire
+right-side stack (VIEW/TIME/TRAVEL-TIME VIEW/INFECTION LAB/UNIVERSES/
+SELECTION/ACCELERATION/TRIP) to the single icon, independent of each
+panel's own per-panel open/closed state underneath. New `railOpen` state
+gates the whole rail `<div>`; the gear button itself sits just above it at
+a fixed position so it's never hidden by its own toggle. Verified: gear
+click removes every right-rail panel from the DOM in one action, leaves
+the left console and the 3D view completely untouched, click again fully
+restores it.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

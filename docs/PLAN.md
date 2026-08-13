@@ -673,6 +673,25 @@ click removes every right-rail panel from the DOM in one action, leaves
 the left console and the 3D view completely untouched, click again fully
 restores it.
 
+**Added 2026-08-13 — Reset view.** User: after panning/zooming/orbiting
+away, or landing somewhere after a trip, "I feel that center is lost" —
+the existing VIEW-panel zoom presets (Neighborhood/Bright stars/Whole
+galaxy) only recenter `target` and animate `radius`, never touching the
+orbit angle (`theta`/`phi`), so a rotated-away view stayed rotated even
+after clicking one. Also confirmed `exitShip()` never resets the atlas
+camera at all — after a trip you land back in whatever pre-flight pan/
+zoom/orbit state you'd left, unrelated to the destination. New named
+constants `DEFAULT_RADIUS`/`DEFAULT_THETA`/`DEFAULT_PHI` (the same values
+the camera already initialized to, now shared instead of duplicated as
+magic numbers) back a new "↺ Reset view" button next to the zoom presets.
+`flyTo` gained an optional third `angles` argument so the fly-animation
+now eases `theta`/`phi` too when passed (existing call sites are
+unaffected — they omit it, so the angle just lerps from-itself-to-itself,
+a no-op). **Verified**: dragged/zoomed/panned to a totally different part
+of the sky (camera distance 60→2.5 ly, framing swapped from Sirius/Orion
+to Arcturus/Spica), clicked Reset view — camera distance read back 59.9 ly
+and the screenshot is pixel-equivalent to the startup frame.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

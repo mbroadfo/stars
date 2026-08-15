@@ -2,11 +2,16 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Stellar Neighborhood — a navigable atlas</title>
     <link rel="icon" href="data:," />
     <style>
       html, body, #root { margin: 0; height: 100%; background: #04060d; }
+      /* 100vh doesn't track mobile Chrome's collapsing address bar, leaving
+         the canvas taller than what's actually visible. 100dvh does — kept
+         as a second declaration (not a replacement) so browsers that don't
+         understand dvh silently keep the vh value instead of erroring. */
+      .stars-root { height: 100dvh; }
     </style>
   </head>
   <body>

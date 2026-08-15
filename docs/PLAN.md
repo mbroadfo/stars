@@ -754,6 +754,29 @@ instead); Clear route hidden with an empty list, appears once Known
 Space's 4 stops are loaded, and clicking it empties the list, restores
 the "no stops yet" hint, and visibly deselects the Known Space button.
 
+**Added 2026-08-15 — mobile fullscreen + dvh sizing.** User: "on mobile
+Chrome why is the browser header and controls always visible?" Root
+cause: mobile Chrome only auto-hides its address bar/toolbar in response
+to a page *scroll* gesture, and this app deliberately never scrolls the
+page (all navigation is canvas drag/pinch/wheel) — so the browser never
+gets the signal it uses to collapse its chrome. Two fixes: (1) a `⛶`
+button next to the existing gear icon calls the Fullscreen API
+(`requestFullscreen`/`exitFullscreen`) on the root element, with a
+`fullscreenchange` listener keeping the icon in sync even when fullscreen
+is exited via ESC or a back-gesture, not just our own button; (2) the root
+container's `100vh` height gained a second CSS declaration, `.stars-root {
+height: 100dvh }` (dynamic viewport height) — mobile Chrome doesn't
+reliably resize `100vh` as its toolbar shows/hides, so the canvas could
+size taller than what's actually visible even before the fullscreen
+question; unsupported browsers just keep the `vh` value, no fallback
+logic needed. Also added `viewport-fit=cover` to the viewport meta tag for
+notched-phone safe-area handling. Verified: `.stars-root`'s computed
+height matches `window.innerHeight` exactly; clicking `⛶` sets
+`document.fullscreenElement` and flips the icon to `⤢`; clicking again
+exits and the icon correctly reverts — full round trip confirmed
+headlessly (Puppeteer's synthetic clicks count as trusted gestures, so
+`requestFullscreen` genuinely succeeds, not just called without erroring).
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

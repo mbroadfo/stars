@@ -739,6 +739,21 @@ Cet," not "● unnamed star." No console/page errors across select universe
 → edit (add/remove/reorder/uncheck) → deselect (list clears) → build
 fully custom route → fly.
 
+**Fixed 2026-08-15 — Clear route button, blurb moved to a tooltip.** User:
+"There's no easy way to clear the Universes selection other than deleting
+each node one by one," plus "the explanation of the universes takes up
+too much space." Two small fixes: the always-visible `{author} — {blurb}`
+line moved to a `title` attribute on each universe button (native hover
+tooltip, zero permanent vertical space) instead of a permanent body-text
+line; a "Clear route" button (ICE-toned, matching the SELECTION panel's
+existing "Clear selection" style) appears next to the universe buttons
+whenever `routeStops` is non-empty, resetting both `routeStops` and
+`selectedUniverseId` in one click. Verified: blurb text never appears in
+page body text at any point (confirmed via the button's `title` attribute
+instead); Clear route hidden with an empty list, appears once Known
+Space's 4 stops are loaded, and clicking it empties the list, restores
+the "no stops yet" hint, and visibly deselects the Known Space button.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

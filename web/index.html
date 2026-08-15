@@ -5,6 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Stellar Neighborhood — a navigable atlas</title>
     <link rel="icon" href="data:," />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#04060d" />
+    <!-- iOS Safari/Chrome (all WebKit — the Fullscreen API doesn't work for
+         page content there at all) never hides its own chrome in a normal
+         tab. This is the actual route to a chrome-free view on iPhone:
+         apple-mobile-web-app-capable makes a home-screen-launched icon run
+         standalone, no browser UI. No apple-touch-icon yet (needs a real
+         PNG, not SVG) — iOS falls back to an auto-generated screenshot
+         thumbnail until one exists. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Stellar Neighborhood" />
     <style>
       html, body, #root { margin: 0; height: 100%; background: #04060d; }
       /* 100vh doesn't track mobile Chrome's collapsing address bar, leaving

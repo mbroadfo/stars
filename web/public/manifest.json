@@ -1,0 +1,12 @@
+{
+  "name": "Stellar Neighborhood — a navigable atlas",
+  "short_name": "Stellar Neighborhood",
+  "description": "Real stars, real distances, real velocity vectors — a navigable interstellar atlas.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#04060d",
+  "theme_color": "#04060d",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

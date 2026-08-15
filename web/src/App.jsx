@@ -2252,6 +2252,7 @@ export default function App() {
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                   {universes.map((u) => (
                     <button key={u.id}
+                      title={`${u.author} — ${u.blurb}`}
                       onClick={() => {
                         if (u.id === selectedUniverseId) {
                           setSelectedUniverseId(null);
@@ -2267,12 +2268,13 @@ export default function App() {
                       {u.title}
                     </button>
                   ))}
+                  {routeStops.length > 0 && (
+                    <button onClick={() => { setSelectedUniverseId(null); setRouteStops([]); }} title="remove every stop and start over"
+                      style={{ ...mono, fontSize: 10, padding: "4px 8px", background: "none", border: "1px solid rgba(143,211,255,0.3)", color: ICE, borderRadius: 4, cursor: "pointer" }}>
+                      Clear route
+                    </button>
+                  )}
                 </div>
-                {selectedUniverseId && universes.find((u) => u.id === selectedUniverseId) && (
-                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 6, lineHeight: 1.4 }}>
-                    {universes.find((u) => u.id === selectedUniverseId).author} — {universes.find((u) => u.id === selectedUniverseId).blurb}
-                  </div>
-                )}
 
                 {routeStops.length === 0 ? (
                   <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 8 }}>

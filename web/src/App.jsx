@@ -2064,6 +2064,14 @@ export default function App() {
                     ↺ Reset view
                   </button>
                 )}
+                {document.fullscreenEnabled && (
+                  <button onClick={toggleFullscreen} title="hides the browser's own address bar/controls on mobile"
+                    style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                      background: isFullscreen ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.1)",
+                      border: `1px solid rgba(232,180,90,${isFullscreen ? 0.7 : 0.35})`, color: "#e8c88a" }}>
+                    {isFullscreen ? "⤢ Exit fullscreen" : "⛶ Fullscreen"}
+                  </button>
+                )}
                 <button onClick={() => setShowLines(!showLines)}
                   style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
                     background: showLines ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",

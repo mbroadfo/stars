@@ -219,6 +219,21 @@ export default function App() {
   const [gateLy, setGateLy] = useState(100);
   const [navOpen, setNavOpen] = useState(true);
   const [railOpen, setRailOpen] = useState(true); // right-rail master collapse, mirrors the left hamburger
+  // Mobile Chrome only auto-hides its address bar in response to a page
+  // scroll, and this app deliberately never scrolls (all navigation is
+  // canvas drag/pinch/wheel) — so the Fullscreen API is the only way to
+  // reclaim that space on demand. Tracks document.fullscreenElement (not
+  // just our own toggle) so exiting via ESC/back-gesture stays in sync.
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const onChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {}); // some browsers require a fresh user gesture each time; a rejected promise here just means it stayed windowed
+  };
   const [secs, setSecs] = useState({ atlas: true, box: true, origin: true, dest: true, brief: true });
   const [viewOpen, setViewOpen] = useState(true);
   const [tripOpen, setTripOpen] = useState(true);
@@ -1850,7 +1865,7 @@ export default function App() {
   );
 
   return (
-    <div style={{ position: "relative", width: "100%", height: "100vh", minHeight: 560, background: "#04060d", overflow: "hidden", color: "#dfe6f2" }}>
+    <div className="stars-root" style={{ position: "relative", width: "100%", height: "100vh", minHeight: 560, background: "#04060d", overflow: "hidden", color: "#dfe6f2" }}>
       <div ref={mountRef} style={{ position: "absolute", inset: 0 }} />
       <div ref={labelsRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" }} />
 
@@ -2011,10 +2026,18 @@ export default function App() {
 
       {/* Right action rail — persistent controls, always visible regardless of console scroll state.
           Gear button mirrors the left hamburger: collapses the whole rail to one icon. */}
-      <button onClick={() => setRailOpen((v) => !v)} title={railOpen ? "collapse controls" : "open controls"}
-        style={{ position: "absolute", top: 14, right: 14, ...panel, ...mono, fontSize: 16, padding: "7px 12px", color: AMBER, cursor: "pointer", zIndex: 6 }}>
-        ⚙
-      </button>
+      <div style={{ position: "absolute", top: 14, right: 14, display: "flex", gap: 8, zIndex: 6 }}>
+        {document.fullscreenEnabled && (
+          <button onClick={toggleFullscreen} title={isFullscreen ? "exit fullscreen" : "fullscreen (hides the browser's own address bar/controls on mobile)"}
+            style={{ ...panel, ...mono, fontSize: 16, padding: "7px 12px", color: AMBER, cursor: "pointer" }}>
+            {isFullscreen ? "⤢" : "⛶"}
+          </button>
+        )}
+        <button onClick={() => setRailOpen((v) => !v)} title={railOpen ? "collapse controls" : "open controls"}
+          style={{ ...panel, ...mono, fontSize: 16, padding: "7px 12px", color: AMBER, cursor: "pointer" }}>
+          ⚙
+        </button>
+      </div>
       {railOpen && (
       <div style={{ position: "absolute", top: 54, right: 14, width: 196, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ ...panel, padding: "9px 10px" }}>

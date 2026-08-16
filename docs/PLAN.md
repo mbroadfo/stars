@@ -886,27 +886,44 @@ only if S5/S6 prove people want to *live* in this thing.
   see Earth transit the Sun does shift, but only on multi-century
   timescales from solar-system motion — nothing a user would perceive
   interacting with the app. Low value for the build cost.
+- Radiosphere vs. exoplanet systems — Radiosphere itself shipped
+  2026-08-16 (below); the original "vs. exoplanet systems" half is its own
+  fast-follow, deliberately deferred since this app currently has zero
+  exoplanet data at all. Needs a curated dataset in the same spirit as
+  Universes' star mappings (real exoplanet-hosting stars within ~125 ly,
+  each cited) — candidates include Proxima b, TRAPPIST-1, 51 Pegasi b,
+  Tau Ceti, Epsilon Eridani.
 
-### Radiosphere — next up
-
-Concentric shells marking how far Earth's radio/TV leakage has traveled,
-each tagged to a real historical milestone rather than one generic 110 ly
-bubble. Anchor shell: Marconi's first transatlantic transmission,
-Dec 12 1901 (the letter "S" in Morse code, Poldhu, Cornwall → St. John's,
-Newfoundland) — ~124 ly radius as of today. Candidate additional shells
-(dates need sourcing/verification before shipping, same discipline as the
-Universes citations):
-
-- First commercial broadcast — KDKA Pittsburgh, Nov 2 1920
-- First TV broadcast strong enough to plausibly be called detectable —
-  Berlin Olympics, 1936 (flagged in the literature as more myth than
-  settled fact; verify before using)
-- Sputnik's beacon, 1957
-- Apollo 11, 1969
-
-Toggle overlays these shells against exoplanet/known-system positions, so
-it's visible which real systems could plausibly have received which
-signal by now.
+**Shipped 2026-08-16 — Radiosphere.** Concentric wireframe shells, one per
+real historical broadcast milestone, radius = light-years since that
+signal left Earth (`CURRENT_YEAR - year`, anchored to the actual calendar
+date, deliberately independent of the app's own ±100k time-scrub axis).
+Five milestones shipped, dates verified via WebSearch: Marconi's
+transatlantic transmission (Dec 12 1901, ~125 ly today), KDKA Pittsburgh's
+first commercial broadcast (1920), the 1936 Berlin Olympics broadcast
+(included but flagged `disputed: true` — SETI's Seth Shostak has publicly
+doubted a low-power, non-directional signal of that era actually escaped
+the ionosphere, so its citation says so rather than presenting the popular
+"Hitler is the first thing aliens see" story as settled fact), Sputnik 1's
+beacon (1957), and Apollo 11's moonwalk broadcast (1969). Each shell is a
+`THREE.WireframeGeometry(SphereGeometry)` + `LineSegments`
+(`RADIO = "#c79bff"`, additive blending, matching the tube/year-ring
+visual language), built once per session in the scene-setup effect and
+toggled per-milestone from a new RADIOSPHERE right-rail accordion section
+— atlas view only, same precedent as Infection Lab/Universes/Travel-Time.
+User feedback after the first pass: with all shells rendered but nothing
+else responding to them, it was hard to tell which stars actually sat
+inside a given bubble. Fixed by reusing the exact distance-fade RANGE GATE
+already applies (same `gate` value threaded through all 4 point/label
+shader call sites) — driven by the outermost *checked* shell's radius
+instead of the manual gate slider, so activating Radiosphere fades every
+star beyond that boundary while everything inside stays fully lit.
+Verified headlessly: milestone radii match `CURRENT_YEAR - year` exactly;
+checking/unchecking toggles shell visibility with no console errors across
+all 5 at once; switching to ship view hides shells (and the whole panel,
+gated `!shipView`) and they reappear back in atlas; at a wide zoom
+("Bright stars" preset) the fade is clearly visible — a bright cluster
+inside the checked shell against a faint background scatter outside it.
 
 ### S7 vs. Gaia DR3 deep field — two different "more stars," not one item
 

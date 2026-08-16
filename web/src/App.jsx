@@ -6,6 +6,7 @@ import { ciToRgb, rgbToCss } from "./lib/color.js";
 import { buildNeighborGrid, runOutbreak, infectedCountAtEpoch } from "./lib/infection.js";
 import { resolveUniverses } from "./lib/universes.js";
 import universesData from "./content/universes.json";
+import radiosphereData from "./content/radiosphere.json";
 
 /* ============================================================
    STELLAR NEIGHBORHOOD — a navigable atlas (S2)
@@ -17,6 +18,11 @@ import universesData from "./content/universes.json";
 
 const AMBER = "#e8b45a";
 const ICE = "#8fd3ff";
+const RADIO = "#c79bff"; // Radiosphere shells — distinct from AMBER (chrome) and ICE (trip/relativity overlays)
+// Real calendar year, not the app's own ±100k time-scrub axis (that plays
+// with speculative proper-motion time travel; the radiosphere is anchored
+// to the actual date these signals were really sent).
+const CURRENT_YEAR = new Date().getFullYear();
 const PICK_MAG_LIMIT = 3.0; // unnamed stars brighter than this are still pickable
 const sunStar = () => ({ i: SUN_IDX, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, ly: 0, rv: 0, name: "Sun" });
 const getStarOrSun = (cat, idx) => (idx === SUN_IDX ? sunStar() : getStar(cat, idx));
@@ -310,6 +316,16 @@ export default function App() {
   const [infectionEpoch, setInfectionEpoch] = useState(0);
   const [infectionEpochPlaying, setInfectionEpochPlaying] = useState(false);
 
+  // Radiosphere — concentric shells marking how far Earth's radio/TV
+  // leakage has traveled, each tied to a real historical milestone.
+  // Atlas view only (hidden automatically in ship view), normally hidden
+  // (empty by default, same discipline as the right-rail accordion).
+  const [radiosphereChecked, setRadiosphereChecked] = useState(() => new Set());
+  const radiosphereMilestones = useMemo(
+    () => radiosphereData.milestones.map((m) => ({ ...m, radiusLy: CURRENT_YEAR - m.year })),
+    []
+  );
+
   // S6 Universes — curated sci-fi settings mapped onto real stars (see
   // lib/universes.js + data/universes.json). Resolved once per catalog
   // load; an unresolvable star mapping is flagged in the UI, never hidden.
@@ -351,6 +367,22 @@ export default function App() {
   useEffect(() => { stateRef.current.incubationYears = incubationYears; }, [incubationYears]);
   useEffect(() => { stateRef.current.pickMode = pickMode; }, [pickMode]);
   useEffect(() => { stateRef.current.infectionEpoch = infectionEpoch; }, [infectionEpoch]);
+  // Radiosphere shells: atlas view only, one visibility flip per checked
+  // milestone — no per-frame cost, nothing here changes during playback.
+  useEffect(() => {
+    const shells = stateRef.current.radiosphereShells;
+    if (!shells) return;
+    for (const [id, mesh] of Object.entries(shells)) mesh.visible = radiosphereChecked.has(id) && !shipView;
+  }, [radiosphereChecked, shipView]);
+  // Outermost checked shell's radius, or 0 if none checked — feeds the same
+  // distance-fade the RANGE GATE uses, so a checked shell isn't just a
+  // decorative boundary: stars beyond it visibly fade, same as the gate.
+  const radiosphereMaxLy = useMemo(() => {
+    let max = 0;
+    for (const m of radiosphereMilestones) if (radiosphereChecked.has(m.id)) max = Math.max(max, m.radiusLy);
+    return max;
+  }, [radiosphereChecked, radiosphereMilestones]);
+  useEffect(() => { stateRef.current.radiosphereMaxLy = radiosphereMaxLy; }, [radiosphereMaxLy]);
 
   // shared by 3D click-picking and the box-select results list: fills the
   // next empty slot, or replaces the older slot once both are full
@@ -904,6 +936,26 @@ export default function App() {
     scene.add(flightRings);
     s.flightYearRings = flightRings;
 
+    // Radiosphere — one wireframe sphere per real historical broadcast
+    // milestone, radius = light-years since that signal left Earth. Built
+    // once (radius is fixed for the session, not tied to any playback
+    // state); per-milestone visibility toggled by the RADIOSPHERE panel
+    // and forced off in ship view (see the effect below). Older/larger
+    // shells rendered fainter as a cheap depth cue when several are
+    // nested at once.
+    s.radiosphereShells = {};
+    radiosphereMilestones.forEach((m, i) => {
+      const geo = new THREE.WireframeGeometry(new THREE.SphereGeometry(m.radiusLy, 24, 16));
+      const mat = new THREE.LineBasicMaterial({
+        color: RADIO, transparent: true, opacity: 0.22 + i * 0.11, depthWrite: false, blending: THREE.AdditiveBlending,
+      });
+      const shell = new THREE.LineSegments(geo, mat);
+      shell.visible = false;
+      shell.frustumCulled = false;
+      scene.add(shell);
+      s.radiosphereShells[m.id] = shell;
+    });
+
     // Selection halo rings
     const mkHalo = (color) => {
       const cnv = document.createElement("canvas"); cnv.width = cnv.height = 64;
@@ -1123,7 +1175,7 @@ export default function App() {
       // RANGE GATE distance still applies here (gated-out stars shouldn't
       // appear), but NAKED EYE magnitude deliberately does not — box-select's
       // whole point is surfacing faint stars you can't otherwise click.
-      const gate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
+      const gate = s.radiosphereMaxLy > 0 ? s.radiosphereMaxLy : (s.skyMode === "gate" ? (s.gateLy ?? 100) : 0);
       for (let i = 0; i < n; i++) {
         const o = i * STRIDE;
         const dx = cat.data[o] + cat.data[o + 3] * yrs;
@@ -1248,7 +1300,7 @@ export default function App() {
       const ty = s.tier1TravelYears;
       const isShip = s.mode === "ship";
       const magLimit = s.skyMode === "eye" ? 6.5 : 99;
-      const gate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
+      const gate = s.radiosphereMaxLy > 0 ? s.radiosphereMaxLy : (s.skyMode === "gate" ? (s.gateLy ?? 100) : 0);
       // The Sun: a code-level sentinel, not a row in `pickable` (see catalog
       // layout — it isn't in the buffer at all), so it's tested separately.
       // Always naked-eye visible by definition (only RANGE GATE distance can
@@ -1387,7 +1439,7 @@ export default function App() {
       const shipOn = s.mode === "ship" ? 1 : 0;
       // filters apply in both modes now — ship-relative in ship view, Sun-relative in atlas view
       const magLimit = s.skyMode === "eye" ? 6.5 : 99;
-      const gate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
+      const gate = s.radiosphereMaxLy > 0 ? s.radiosphereMaxLy : (s.skyMode === "gate" ? (s.gateLy ?? 100) : 0);
       const morph = shipOn ? 0 : (s.travelMorph ?? 0); // Travel-Time View is atlas-only
       for (const m of s.shipMats) {
         m.uniforms.uShip.value = shipOn;
@@ -1489,7 +1541,7 @@ export default function App() {
         retTag.style.display = "none";
       }
       const labelMagLimit = s.skyMode === "eye" ? 6.5 : 99;
-      const labelGate = s.skyMode === "gate" ? (s.gateLy ?? 100) : 0;
+      const labelGate = s.radiosphereMaxLy > 0 ? s.radiosphereMaxLy : (s.skyMode === "gate" ? (s.gateLy ?? 100) : 0);
       const labelIsShip = s.mode === "ship";
       labelEls.forEach(({ el: le, star }) => {
         if (!s.showNames) { le.style.display = "none"; return; } // blunt on/off toggle, independent of the gate
@@ -2421,6 +2473,47 @@ export default function App() {
                     color: universeRouteStops ? "#f0d9a8" : "#4a5570" }}>
                   ▶ Fly this route
                 </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {!shipView && (
+          <div style={{ ...panel, padding: "9px 10px" }}>
+            <div onClick={() => toggleRailSection("radiosphere")}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: railSection === "radiosphere" ? 7 : 0 }}>
+              <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>RADIOSPHERE</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{railSection === "radiosphere" ? "▾" : "▸"}</span>
+            </div>
+            {railSection === "radiosphere" && (
+              <>
+                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginBottom: 6 }}>
+                  how far Earth's radio/TV leakage has traveled, by real broadcast
+                </div>
+                {radiosphereMilestones.map((m) => {
+                  const checked = radiosphereChecked.has(m.id);
+                  return (
+                    <label key={m.id} title={m.citation}
+                      style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", marginBottom: 4 }}>
+                      <input type="checkbox" checked={checked}
+                        onChange={() => setRadiosphereChecked((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(m.id)) next.delete(m.id); else next.add(m.id);
+                          return next;
+                        })}
+                        style={{ accentColor: RADIO }} />
+                      <span style={{ ...mono, fontSize: 10.5, color: "#cfc0e8", flex: 1 }}>
+                        {m.title}{m.disputed ? " (disputed)" : ""}
+                      </span>
+                      <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{m.radiusLy} ly</span>
+                    </label>
+                  );
+                })}
+                {radiosphereMaxLy > 0 && (
+                  <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 4 }}>
+                    fading stars beyond {radiosphereMaxLy} ly, the outermost checked shell
+                  </div>
+                )}
               </>
             )}
           </div>

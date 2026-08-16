@@ -184,6 +184,47 @@ function buildMultiLegTube(stops, accel) {
   return { positions, colors, indices, yearRingPositions };
 }
 
+// Ship-view fly-through year rings: floating circles at each whole ship-
+// year along the CURRENT trip's straight-line path, oriented perpendicular
+// to the direction of travel so the ship visually passes through them —
+// same idea as the Orange Tube's rings (spacing carries the dilation
+// story), but experienced first-person instead of viewed from outside in
+// atlas mode. Deliberately a standalone function rather than a refactor of
+// buildGammaTube's own year-ring block above (same closed-form gamma<->f
+// inversion, kept separate to avoid any risk of regressing the
+// already-shipped tube) — the two are meant to stay in sync by inspection,
+// not by shared code.
+function buildFlightYearRings(from, to, D, accel) {
+  const dir = to.clone().sub(from);
+  const len = dir.length();
+  if (len < 1e-6) return { positions: [] };
+  dir.normalize();
+  const seed = Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const u = seed.clone().sub(dir.clone().multiplyScalar(seed.dot(dir))).normalize();
+  const v = dir.clone().cross(u);
+  const half = brachAt(D, accel, 0.5);
+  const accelLyYr2 = accel * G_LY_YR2;
+  const totalShipYears = 2 * half.shipYears;
+  const radius = Math.max(len * 0.018, 0.05); // same visual scale as the tube's rMax
+  const RING_SEGS = 24;
+  const positions = [];
+  for (let yr = 1; yr < totalShipYears; yr++) {
+    const onFirstHalf = yr <= half.shipYears;
+    const t = onFirstHalf ? yr : totalShipYears - yr;
+    const gamma = Math.cosh(accelLyYr2 * t);
+    let f = Math.min(0.5, (gamma - 1) / (accelLyYr2 * D));
+    if (!onFirstHalf) f = 1 - f;
+    const center = from.clone().addScaledVector(dir, f * len);
+    for (let j = 0; j < RING_SEGS; j++) {
+      const t0 = (j / RING_SEGS) * Math.PI * 2, t1 = ((j + 1) / RING_SEGS) * Math.PI * 2;
+      const p0 = center.clone().addScaledVector(u, Math.cos(t0) * radius).addScaledVector(v, Math.sin(t0) * radius);
+      const p1 = center.clone().addScaledVector(u, Math.cos(t1) * radius).addScaledVector(v, Math.sin(t1) * radius);
+      positions.push(p0.x, p0.y, p0.z, p1.x, p1.y, p1.z);
+    }
+  }
+  return { positions };
+}
+
 export default function App() {
   const mountRef = useRef(null);
   const labelsRef = useRef(null);
@@ -433,6 +474,9 @@ export default function App() {
       const from = s.shipPos.clone(); // wherever the ship is currently parked — Sun or origin star
       const to = starPos(s.targetIdx, s.years ?? 0); // fixed at the departure epoch — no mid-flight re-aiming (that's intercept nav, S5)
       s.trip = { from, to, D: to.distanceTo(from), frac: 0, playing: true, durSec: 40 };
+      const rings = buildFlightYearRings(from, to, s.trip.D, s.accel ?? 1);
+      s.flightYearRings.geometry.setAttribute("position", new THREE.Float32BufferAttribute(rings.positions, 3));
+      s.flightYearRings.visible = rings.positions.length > 0;
       setTrip({ D: s.trip.D, name: nameFor(s.targetIdx), originName: nameFor(s.originIdx) });
       setTripPlaying(true);
     };
@@ -846,6 +890,21 @@ export default function App() {
     yearRings.frustumCulled = false;
     scene.add(yearRings);
     s.tubeYearRings = yearRings;
+
+    // Ship-view fly-through year rings (see buildFlightYearRings above) —
+    // same visual language (ICE, additive) as the atlas tube's rings,
+    // rebuilt fresh in s.startTrip() for whichever leg is currently
+    // underway; visibility driven per-frame in animate() (ship mode + an
+    // active trip only).
+    const flightRingGeo = new THREE.BufferGeometry();
+    const flightRingMat = new THREE.LineBasicMaterial({
+      color: ICE, transparent: true, opacity: 0.85, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    const flightRings = new THREE.LineSegments(flightRingGeo, flightRingMat);
+    flightRings.visible = false;
+    flightRings.frustumCulled = false;
+    scene.add(flightRings);
+    s.flightYearRings = flightRings;
 
     // Selection halo rings
     const mkHalo = (color) => {
@@ -1367,6 +1426,7 @@ export default function App() {
       if (s.starMat) s.starMat.uniforms.uYears.value = s.effYears;
       if (s.astMat) s.astMat.uniforms.uYears.value = s.effYears;
       if (s.astLines) s.astLines.visible = s.showLines !== false;
+      if (s.flightYearRings) s.flightYearRings.visible = s.mode === "ship" && !!s.trip && s.flightYearRings.geometry.attributes.position?.count > 0;
       if (s.mode === "ship") {
         camera.position.copy(s.shipPos);
         const cpt = Math.cos(s.shipPitch);

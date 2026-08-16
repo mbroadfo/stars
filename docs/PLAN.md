@@ -798,6 +798,34 @@ env(safe-area-inset-top))` computed to exactly `14px` on desktop Chrome,
 confirming no regression) — the actual on-device fix could only be
 confirmed by the user directly, not simulated in headless testing.
 
+**Added 2026-08-16 — ship-view fly-through year rings.** User: "can we
+add the annual circles in the ship journey to the ship view? Not the
+entire orange tube, just a floating circle that we fly through to denote
+a year of ship time passage." New `buildFlightYearRings(from, to, D,
+accel)` — same closed-form gamma↔f inversion as `buildGammaTube`'s own
+year-ring block, kept as a separate standalone function rather than a
+refactor of that already-shipped code (lower regression risk; the two are
+meant to stay in sync by inspection, documented in a comment, not by
+shared code) — returns one ring's worth of line-segment positions per
+whole ship-year along the trip's straight path, oriented perpendicular to
+the direction of travel. A new `s.flightYearRings` `LineSegments` (ICE,
+additive — same visual language as the atlas tube's rings) is rebuilt
+inside `s.startTrip()`, which both the original single-trip button and
+`continueRoute()`'s per-leg departures already call — so multi-leg
+Universes routes get correctly reset rings for whichever leg is currently
+underway, with no extra call sites needed. Visibility is driven per-frame
+(ship mode + an active trip only), independent of the atlas Orange Tube,
+which stays hidden throughout — this is a first-person-only effect, no
+tube shape is drawn in ship view. **Verified real 3D placement, not the
+2D target reticle**: screenshotted while looking directly at the
+destination (where a ring and the reticle would coincide and be
+ambiguous), then dragged to look away and up — both off-axis screenshots
+show a ring rendering as a large perspective ellipse elsewhere in the
+frame, proving it's a real world-space object independent of where the
+target reticle is pointing. Confirmed hidden before departure (no trip
+yet) and correctly disappears on "← Back to atlas," no console errors
+across the full start-trip → fly → exit cycle.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

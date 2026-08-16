@@ -925,6 +925,36 @@ gated `!shipView`) and they reappear back in atlas; at a wide zoom
 ("Bright stars" preset) the fade is clearly visible — a bright cluster
 inside the checked shell against a faint background scatter outside it.
 
+**Fixed 2026-08-16 — Radiosphere: checking all 5 shells was an
+unreadable tangle.** With every shell rendering its full lat/long
+wireframe, 5 nested spheres at once produced a dense crosshatched ball —
+user: "should we have the ability to turn lines off? or not show the
+backside of the sphere?" Did both. (1) Replaced each shell's
+`LineBasicMaterial` with a `ShaderMaterial` that discards the far
+hemisphere relative to the camera (a vertex's local position on a
+sphere centered at the origin IS its outward normal, so this needed no
+extra geometry data — just `dot(worldNormal, normalize(cameraPosition -
+worldPos))`, discard when negative). First attempt discarded almost the
+entire sphere whenever the camera sat *inside* a shell's radius — true
+far more often than not, since these shells run 57–125 ly and normal
+browsing distance is right in that range, and from inside a sphere
+there's no meaningful "far side" to hide. Fixed by adding a second
+varying (`vInside`, comparing `length(cameraPosition)` against a
+`uRadius` uniform set per-shell at creation) and only applying the cull
+when the camera is outside: full wireframe from inside, near-hemisphere
+dome from outside. (2) Added an independent `radiosphereShowOutlines`
+toggle in the panel — deliberately decoupled from the RANGE-GATE-style
+star fade above, which was already driven purely by `radiosphereChecked`
+and never touched shell mesh visibility, so hiding the wireframes has
+zero effect on which stars read as inside/outside. Verified headlessly:
+no shader compile errors with all 5 shells checked at once; at the
+default 60 ly zoom (camera inside 4 of 5 shells) those 4 render full
+wireframe and the 57 ly Apollo shell (camera just outside it) renders
+only its near cap; at a 2,000 ly zoom (camera outside every shell) all
+visible shells render as a sparse dome instead of a solid tangle; the
+outlines toggle removes all wireframes while checkboxes and the star
+fade stay untouched.
+
 ### S7 vs. Gaia DR3 deep field — two different "more stars," not one item
 
 - **S7 (full catalog streaming)** — the rest of *this app's existing

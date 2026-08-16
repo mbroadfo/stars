@@ -321,6 +321,10 @@ export default function App() {
   // Atlas view only (hidden automatically in ship view), normally hidden
   // (empty by default, same discipline as the right-rail accordion).
   const [radiosphereChecked, setRadiosphereChecked] = useState(() => new Set());
+  // The fade (which stars are inside/outside) never depends on this — only
+  // on radiosphereChecked/radiosphereMaxLy below — so this purely controls
+  // whether the boundary wireframes themselves are drawn.
+  const [radiosphereShowOutlines, setRadiosphereShowOutlines] = useState(true);
   const radiosphereMilestones = useMemo(
     () => radiosphereData.milestones.map((m) => ({ ...m, radiusLy: CURRENT_YEAR - m.year })),
     []
@@ -372,8 +376,9 @@ export default function App() {
   useEffect(() => {
     const shells = stateRef.current.radiosphereShells;
     if (!shells) return;
-    for (const [id, mesh] of Object.entries(shells)) mesh.visible = radiosphereChecked.has(id) && !shipView;
-  }, [radiosphereChecked, shipView]);
+    for (const [id, mesh] of Object.entries(shells))
+      mesh.visible = radiosphereChecked.has(id) && !shipView && radiosphereShowOutlines;
+  }, [radiosphereChecked, shipView, radiosphereShowOutlines]);
   // Outermost checked shell's radius, or 0 if none checked — feeds the same
   // distance-fade the RANGE GATE uses, so a checked shell isn't just a
   // decorative boundary: stars beyond it visibly fade, same as the gate.
@@ -942,12 +947,48 @@ export default function App() {
     // state); per-milestone visibility toggled by the RADIOSPHERE panel
     // and forced off in ship view (see the effect below). Older/larger
     // shells rendered fainter as a cheap depth cue when several are
-    // nested at once.
+    // nested at once. Each shell is centered at the scene origin with no
+    // rotation, so a vertex's local position IS its outward radius
+    // direction — used below to discard the far hemisphere relative to
+    // the camera, so a shell reads as a near-side net instead of a fully
+    // tangled ball when viewed from outside (worse the more shells are
+    // checked at once). That cull is skipped entirely while the camera is
+    // INSIDE a given shell's radius — from in there, there's no "far
+    // side" to hide (typical browsing distance is well within these
+    // radii), so discarding by outward-normal would wipe out nearly the
+    // whole sphere instead of decluttering it.
     s.radiosphereShells = {};
     radiosphereMilestones.forEach((m, i) => {
       const geo = new THREE.WireframeGeometry(new THREE.SphereGeometry(m.radiusLy, 24, 16));
-      const mat = new THREE.LineBasicMaterial({
-        color: RADIO, transparent: true, opacity: 0.22 + i * 0.11, depthWrite: false, blending: THREE.AdditiveBlending,
+      const mat = new THREE.ShaderMaterial({
+        uniforms: {
+          uColor: { value: new THREE.Color(RADIO) },
+          uOpacity: { value: 0.32 + i * 0.13 },
+          uRadius: { value: m.radiusLy },
+        },
+        vertexShader: `
+          uniform float uRadius;
+          varying float vFacing;
+          varying float vInside;
+          void main() {
+            vec3 worldNormal = normalize(mat3(modelMatrix) * position);
+            vec3 worldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+            vFacing = dot(worldNormal, normalize(cameraPosition - worldPos));
+            vInside = length(cameraPosition) < uRadius ? 1.0 : 0.0;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          varying float vFacing;
+          varying float vInside;
+          uniform vec3 uColor;
+          uniform float uOpacity;
+          void main() {
+            if (vInside < 0.5 && vFacing < 0.0) discard;
+            gl_FragColor = vec4(uColor, uOpacity);
+          }
+        `,
+        transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
       });
       const shell = new THREE.LineSegments(geo, mat);
       shell.visible = false;
@@ -2490,6 +2531,13 @@ export default function App() {
                 <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginBottom: 6 }}>
                   how far Earth's radio/TV leakage has traveled, by real broadcast
                 </div>
+                <button onClick={() => setRadiosphereShowOutlines((v) => !v)}
+                  title="the star-fade stays on regardless — this only toggles the boundary wireframes"
+                  style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer", marginBottom: 6,
+                    background: radiosphereShowOutlines ? "rgba(199,155,255,0.22)" : "rgba(199,155,255,0.05)",
+                    border: `1px solid rgba(199,155,255,${radiosphereShowOutlines ? 0.6 : 0.25})`, color: "#cfa8ff" }}>
+                  outlines {radiosphereShowOutlines ? "on" : "off"}
+                </button>
                 {radiosphereMilestones.map((m) => {
                   const checked = radiosphereChecked.has(m.id);
                   return (

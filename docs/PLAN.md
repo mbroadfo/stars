@@ -826,6 +826,30 @@ target reticle is pointing. Confirmed hidden before departure (no trip
 yet) and correctly disappears on "← Back to atlas," no console errors
 across the full start-trip → fly → exit cycle.
 
+**Fixed 2026-08-16 — iOS standalone: corner buttons still unclickable
+after the safe-area fix.** User: "If I pull the screen down they cannot
+be clicked." That detail was the actual diagnosis — `html`/`body` had no
+`overflow`/`position` lock at all (only our own React root div did), so
+iOS standalone mode was free to rubber-band/bounce the whole page on a
+downward drag. Mid-bounce, a touch starting on a button gets consumed as
+the scroll gesture instead of delivered as a tap, and the button's
+on-screen position shifts during the animation anyway — a different bug
+from the earlier safe-area-inset one (that fixed *where* the buttons sit;
+this fixes *whether the page can move out from under them at all*). Fixed
+with the standard WebKit lock: `html, body { overflow: hidden;
+overscroll-behavior: none; position: fixed; inset: 0; width: 100%; }` —
+`overscroll-behavior` is the modern (iOS 16+) way to say it,
+`position: fixed` the older and more universally effective one for
+WebKit specifically, both set together. Safe since this app was already
+a fixed single-viewport experience by design (only the canvas's own
+custom drag/pinch handlers ever move the camera; nothing relies on page
+scroll — confirmed via a full source grep). Verified headlessly:
+`getComputedStyle(document.body)` now reports `position: fixed`,
+`overflow: hidden`; both corner buttons remain clickable; orbit/zoom via
+mouse still work exactly as before; an explicit `window.scrollTo(0, 200)`
+leaves `scrollY` at `0`. The actual on-device confirmation (no more
+pull-down bounce, buttons reliably tappable) needs the same iPhone.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

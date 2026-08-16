@@ -1,0 +1,35 @@
+{
+  "milestones": [
+    {
+      "id": "marconi",
+      "title": "Marconi transatlantic transmission",
+      "year": 1901,
+      "citation": "Dec 12, 1901 — the Morse code letter \"S\" transmitted from Poldhu, Cornwall and received at Signal Hill, St. John's, Newfoundland, ~3,440 km away — the first proof radio could carry beyond the horizon — history.com/this-day-in-history/december-12/marconi-sends-first-atlantic-wireless-transmission"
+    },
+    {
+      "id": "kdka",
+      "title": "KDKA Pittsburgh, first commercial broadcast",
+      "year": 1920,
+      "citation": "Nov 2, 1920 — KDKA's Harding–Cox election-night broadcast, widely cited as the first commercially licensed radio broadcast in the United States"
+    },
+    {
+      "id": "berlin1936",
+      "title": "1936 Berlin Olympics broadcast",
+      "year": 1936,
+      "disputed": true,
+      "citation": "Popularly cited as the first broadcast strong enough to leak into space (the \"Hitler is the first thing aliens see\" story), but SETI's Seth Shostak has publicly doubted a low-power, non-directional signal of that era actually escaped the ionosphere — shown here anyway, flagged as disputed rather than silently omitted — themarysue.com/human-radio-broadcasts"
+    },
+    {
+      "id": "sputnik",
+      "title": "Sputnik 1 beacon",
+      "year": 1957,
+      "citation": "Oct 4, 1957 — Sputnik 1's radio beacon transmitted at 20.005 and 40.002 MHz for about three weeks, the first artificial signal broadcast from orbit"
+    },
+    {
+      "id": "apollo11",
+      "title": "Apollo 11 moonwalk broadcast",
+      "year": 1969,
+      "citation": "Jul 20, 1969 — the first live television broadcast of humans walking on another world, watched by an estimated 600 million people on Earth"
+    }
+  ]
+}

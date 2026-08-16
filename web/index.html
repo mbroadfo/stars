@@ -19,6 +19,18 @@
     <meta name="apple-mobile-web-app-title" content="Stellar Neighborhood" />
     <style>
       html, body, #root { margin: 0; height: 100%; background: #04060d; }
+      /* This app is a fixed single-viewport experience by design — nothing
+         should ever scroll the page itself (only the canvas's own custom
+         drag/pinch handlers move the camera). Without this, iOS standalone
+         mode lets html/body rubber-band/bounce on a downward drag (there
+         was no overflow/position lock on them at all), which both shifts
+         the top-corner buttons out of place mid-bounce and swallows the
+         touch as a scroll gesture instead of delivering it as a tap — the
+         actual cause of "pull the screen down and they can't be clicked."
+         overscroll-behavior is the modern (iOS 16+) way to say the same
+         thing; position:fixed is the older, more universally effective one
+         for WebKit specifically, so both are set as belt-and-suspenders. */
+      html, body { overflow: hidden; overscroll-behavior: none; position: fixed; inset: 0; width: 100%; }
       /* 100vh doesn't track mobile Chrome's collapsing address bar, leaving
          the canvas taller than what's actually visible. 100dvh does — kept
          as a second declaration (not a replacement) so browsers that don't

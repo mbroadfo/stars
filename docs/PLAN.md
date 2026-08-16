@@ -153,7 +153,7 @@ independent of the scrub position) with a one-click jump to that epoch;
 two-star separation/closure in the mission brief is fully time-aware (Sirius
 → Vega: 33.17 ly now, 30.57 ly at +50,000 yr).
 
-### S4.5 ⭐ — The Traveler's Sky (in progress; build BEFORE S4)
+### S4.5 ⭐ — The Traveler's Sky ✅
 
 **Shipped 2026-07-19 — tests 1 + 2 live in production:** asterism lines
 (123 lines / 23 constellations, hand-curated license-clean, all endpoints
@@ -850,6 +850,23 @@ mouse still work exactly as before; an explicit `window.scrollTo(0, 200)`
 leaves `scrollY` at `0`. The actual on-device confirmation (no more
 pull-down bounce, buttons reliably tappable) needs the same iPhone.
 
+**Shipped 2026-08-16 — right-rail accordion + mobile credits hide.** The
+gear-icon rail's six sub-panels (VIEW, TIME, TRAVEL-TIME VIEW, INFECTION
+LAB, UNIVERSES, TRIP) each had their own independent open/closed boolean
+— VIEW and TRIP defaulted open, the rest closed, and any number could be
+open at once, crowding the rail. Collapsed all six into one `railSection`
+state (`null` by default, one key at a time); opening any section closes
+whichever else was open. Also: the bottom-right credits/honesty line is a
+single long sentence that's fine as a desktop footnote but wraps across
+several lines and eats canvas space on a phone — hidden below 700px via a
+`.app-credits` CSS media query rather than removed, so the attribution
+text is still there on any screen with room for it. Verified headlessly:
+initial state has all five toggleable sections collapsed; opening VIEW
+then TIME closes VIEW; opening UNIVERSES closes TIME; clicking UNIVERSES
+again closes it with nothing left open; `.app-credits` computed `display`
+is visible at 1600px width and `none` at 390px (iPhone-width) with no
+console errors either way.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build
@@ -857,15 +874,54 @@ only if S5/S6 prove people want to *live* in this thing.
 
 ### Backlog
 
-- Multi-hop route planner with crew-age/Earth-calendar ledger — largely
-  unscheduled, but S6's Universes canon routes need leg-chaining anyway, so
-  expect this to arrive as an S6 side effect rather than its own stage.
-- Intercept navigation (aim where a star *will be*, not where it is) — the
-  natural companion to a fixed-line trip visibly missing a fast-moving
-  destination, which S4.6 made visible but doesn't fix.
-- Radiosphere: 110 ly broadcast bubble vs. exoplanet systems
-- Earth Transit Zone
-- Gaia DR3 deep field
+- ~~Multi-hop route planner with crew-age/Earth-calendar ledger~~ — shipped
+  as part of S6 Universes (`s.startRoute`/`s.continueRoute` leg-chaining
+  through the existing single-leg trip engine).
+- ~~Intercept navigation~~ (aim where a star *will be*, not where it is) —
+  dropped 2026-08-16: even a fast mover like Barnard's Star (~90 km/s
+  transverse) shifts only a fraction of a light-year over a multi-year 1g
+  brachistochrone trip — invisible at any zoom level that shows the
+  destination system. Not worth building.
+- ~~Earth Transit Zone~~ — dropped 2026-08-16: the zone of stars that can
+  see Earth transit the Sun does shift, but only on multi-century
+  timescales from solar-system motion — nothing a user would perceive
+  interacting with the app. Low value for the build cost.
+
+### Radiosphere — next up
+
+Concentric shells marking how far Earth's radio/TV leakage has traveled,
+each tagged to a real historical milestone rather than one generic 110 ly
+bubble. Anchor shell: Marconi's first transatlantic transmission,
+Dec 12 1901 (the letter "S" in Morse code, Poldhu, Cornwall → St. John's,
+Newfoundland) — ~124 ly radius as of today. Candidate additional shells
+(dates need sourcing/verification before shipping, same discipline as the
+Universes citations):
+
+- First commercial broadcast — KDKA Pittsburgh, Nov 2 1920
+- First TV broadcast strong enough to plausibly be called detectable —
+  Berlin Olympics, 1936 (flagged in the literature as more myth than
+  settled fact; verify before using)
+- Sputnik's beacon, 1957
+- Apollo 11, 1969
+
+Toggle overlays these shells against exoplanet/known-system positions, so
+it's visible which real systems could plausibly have received which
+signal by now.
+
+### S7 vs. Gaia DR3 deep field — two different "more stars," not one item
+
+- **S7 (full catalog streaming)** — the rest of *this app's existing
+  source*, AT-HYG v3.2, beyond the 268,146 stars already shipped across
+  Tier 1 + Tier 2. ~2.5M stars total, still a curated bright/near-star
+  catalog (AT-HYG is itself compiled from Hipparcos + Tycho-2 + Gaia,
+  filtered for naming/positional quality). Go/no-go, not committed — see
+  above.
+- **Gaia DR3 deep field** — a distinct, deeper source: raw Gaia DR3 has
+  ~1.8 billion sources, mostly extremely faint and distant, well beyond
+  anything AT-HYG curates in at any tier (including S7's full 2.5M). This
+  would exist purely for background density/texture — a genuine deep-field
+  look — not as additional named, navigable stars. Still unscoped; would
+  need its own go/no-go, independent of S7's.
 
 ## Working agreements
 

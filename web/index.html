@@ -36,6 +36,13 @@
          as a second declaration (not a replacement) so browsers that don't
          understand dvh silently keep the vh value instead of erroring. */
       .stars-root { height: 100dvh; }
+      /* The credits line is a single long sentence — fine as a corner
+         footnote on a desktop-width screen, but it wraps into several
+         lines and eats real canvas space on a phone. Just drop it there;
+         it's attribution/honesty text, not functional UI. */
+      @media (max-width: 700px) {
+        .app-credits { display: none; }
+      }
     </style>
   </head>
   <body>

@@ -276,8 +276,10 @@ export default function App() {
     else document.documentElement.requestFullscreen().catch(() => {}); // some browsers require a fresh user gesture each time; a rejected promise here just means it stayed windowed
   };
   const [secs, setSecs] = useState({ atlas: true, box: true, origin: true, dest: true, brief: true });
-  const [viewOpen, setViewOpen] = useState(true);
-  const [tripOpen, setTripOpen] = useState(true);
+  // Right-rail accordion (VIEW/TIME/TRAVEL-TIME/INFECTION LAB/UNIVERSES/TRIP):
+  // at most one section open at a time, none open by default.
+  const [railSection, setRailSection] = useState(null);
+  const toggleRailSection = (k) => setRailSection((s) => (s === k ? null : k));
 
   const [boxSelectOn, setBoxSelectOn] = useState(false);
   const [boxResults, setBoxResults] = useState(null); // [{idx,name,mag,ly,camDist}] or null
@@ -287,14 +289,12 @@ export default function App() {
   // PLAN.md S4). years: signed offset from now, driven by real 6D velocities.
   const [years, setYears] = useState(0);
   const [yearsPlaying, setYearsPlaying] = useState(false);
-  const [timeOpen, setTimeOpen] = useState(false);
 
   // Travel-Time View (S5 test 2) — a third atlas projection: radial distance
   // from the origin becomes ship-years to reach it at the current accel;
   // angle unchanged. Render-only (see honesty note at the shader) — atlas
   // view only, forced to 0 in ship view, same as the tube.
   const [travelMorph, setTravelMorph] = useState(0); // 0 = real space, 1 = fully morphed
-  const [travelOpen, setTravelOpen] = useState(false);
 
   // The Infection Lab (S6) — a Project Hail Mary-style astrophage
   // percolation sim over real Tier 1 positions via a spatial neighbor grid
@@ -306,7 +306,6 @@ export default function App() {
   const [hopRangeLy, setHopRangeLy] = useState(8);       // ly — canonical astrophage range
   const [transmitChance, setTransmitChance] = useState(0.7);
   const [incubationYears, setIncubationYears] = useState(1);
-  const [infectionOpen, setInfectionOpen] = useState(false);
   const [infectionSummary, setInfectionSummary] = useState(null); // {totalInfected,maxGeneration,maxEpoch,percolated}
   const [infectionEpoch, setInfectionEpoch] = useState(0);
   const [infectionEpochPlaying, setInfectionEpochPlaying] = useState(false);
@@ -314,7 +313,6 @@ export default function App() {
   // S6 Universes — curated sci-fi settings mapped onto real stars (see
   // lib/universes.js + data/universes.json). Resolved once per catalog
   // load; an unresolvable star mapping is flagged in the UI, never hidden.
-  const [universesOpen, setUniversesOpen] = useState(false);
   const [selectedUniverseId, setSelectedUniverseId] = useState(null);
   const universes = useMemo(() => (cat ? resolveUniverses(cat, universesData) : []), [cat]);
   // Drives the atlas-view tube preview (see the tube-rebuild effect below)
@@ -2107,12 +2105,12 @@ export default function App() {
       {railOpen && (
       <div style={{ position: "absolute", top: "calc(54px + env(safe-area-inset-top))", right: 14, width: 196, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ ...panel, padding: "9px 10px" }}>
-          <div onClick={() => setViewOpen((v) => !v)}
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: viewOpen ? 7 : 0 }}>
+          <div onClick={() => toggleRailSection("view")}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: railSection === "view" ? 7 : 0 }}>
             <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>VIEW</span>
-            <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{viewOpen ? "▾" : "▸"}</span>
+            <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{railSection === "view" ? "▾" : "▸"}</span>
           </div>
-          {viewOpen && (
+          {railSection === "view" && (
             <>
               <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {!shipView && [["Neighborhood", 60], ["Bright stars", 1600], ["Whole galaxy", 95000]].map(([label, r]) => (
@@ -2195,12 +2193,12 @@ export default function App() {
         </div>
 
         <div style={{ ...panel, padding: "9px 10px" }}>
-          <div onClick={() => setTimeOpen((v) => !v)}
-            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: timeOpen ? 7 : 0 }}>
+          <div onClick={() => toggleRailSection("time")}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: railSection === "time" ? 7 : 0 }}>
             <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>TIME</span>
-            <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{timeOpen ? "▾" : "▸"}</span>
+            <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{railSection === "time" ? "▾" : "▸"}</span>
           </div>
-          {timeOpen && (
+          {railSection === "time" && (
             <>
               <div style={{ ...serif, fontSize: 15, color: "#f0e8d8", textAlign: "center" }}>
                 {effectiveYears === 0 ? "NOW" : `T${effectiveYears > 0 ? "+" : "−"}${fmt(Math.abs(effectiveYears), 0)} yr`}
@@ -2225,12 +2223,12 @@ export default function App() {
 
         {!shipView && (
           <div style={{ ...panel, padding: "9px 10px" }}>
-            <div onClick={() => setTravelOpen((v) => !v)}
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: travelOpen ? 7 : 0 }}>
+            <div onClick={() => toggleRailSection("travel")}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: railSection === "travel" ? 7 : 0 }}>
               <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>TRAVEL-TIME VIEW</span>
-              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{travelOpen ? "▾" : "▸"}</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{railSection === "travel" ? "▾" : "▸"}</span>
             </div>
-            {travelOpen && (
+            {railSection === "travel" && (
               <>
                 <input type="range" min="0" max="100" step="1" value={Math.round(travelMorph * 100)}
                   onChange={(e) => setTravelMorph(Number(e.target.value) / 100)}
@@ -2248,12 +2246,12 @@ export default function App() {
 
         {!shipView && (
           <div style={{ ...panel, padding: "9px 10px" }}>
-            <div onClick={() => setInfectionOpen((v) => !v)}
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: infectionOpen ? 7 : 0 }}>
+            <div onClick={() => toggleRailSection("infection")}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: railSection === "infection" ? 7 : 0 }}>
               <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>INFECTION LAB</span>
-              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{infectionOpen ? "▾" : "▸"}</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{railSection === "infection" ? "▾" : "▸"}</span>
             </div>
-            {infectionOpen && (
+            {railSection === "infection" && (
               <>
                 <div style={{ ...mono, fontSize: 9, color: "#8fa0c0", marginBottom: 3 }}>patient zero</div>
                 <div style={{ display: "flex", gap: 5, alignItems: "center" }}>
@@ -2339,12 +2337,12 @@ export default function App() {
 
         {!shipView && universes.length > 0 && (
           <div style={{ ...panel, padding: "9px 10px" }}>
-            <div onClick={() => setUniversesOpen((v) => !v)}
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: universesOpen ? 7 : 0 }}>
+            <div onClick={() => toggleRailSection("universes")}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: railSection === "universes" ? 7 : 0 }}>
               <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>UNIVERSES</span>
-              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{universesOpen ? "▾" : "▸"}</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{railSection === "universes" ? "▾" : "▸"}</span>
             </div>
-            {universesOpen && (
+            {railSection === "universes" && (
               <>
                 <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                   {universes.map((u) => (
@@ -2466,12 +2464,12 @@ export default function App() {
 
         {shipView && (
           <div style={{ ...panel, padding: "9px 10px" }}>
-            <div onClick={() => setTripOpen((v) => !v)}
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: tripOpen ? 7 : 0 }}>
+            <div onClick={() => toggleRailSection("trip")}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: railSection === "trip" ? 7 : 0 }}>
               <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>TRIP</span>
-              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{tripOpen ? "▾" : "▸"}</span>
+              <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{railSection === "trip" ? "▾" : "▸"}</span>
             </div>
-            {tripOpen && <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+            {railSection === "trip" && <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
               {!trip && (
                 <button onClick={() => stateRef.current.startTrip?.()}
                   style={{ ...mono, fontSize: 10.5, padding: "5px 10px",
@@ -2590,8 +2588,8 @@ export default function App() {
         </div>
       )}
 
-      {/* Credits */}
-      <div style={{ position: "absolute", bottom: "calc(8px + env(safe-area-inset-bottom))", right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
+      {/* Credits — hidden on narrow/mobile viewports via .app-credits in index.html, too much text to fit there */}
+      <div className="app-credits" style={{ position: "absolute", bottom: "calc(8px + env(safe-area-inset-bottom))", right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
         all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time · the mission-brief tube's width is an illustrative function of γ, not a real spatial unit · the rings around it mark whole ship-years — their spacing, not their size, is the point · Travel-Time View remaps radial distance to ship-years at the current accel and never touches real positions used for measurement
       </div>
     </div>

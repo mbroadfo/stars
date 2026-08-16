@@ -777,6 +777,27 @@ exits and the icon correctly reverts — full round trip confirmed
 headlessly (Puppeteer's synthetic clicks count as trusted gestures, so
 `requestFullscreen` genuinely succeeds, not just called without erroring).
 
+**Fixed 2026-08-16 — iOS standalone mode's status bar covered the corner
+buttons.** Confirmed live on the user's iPhone 17 Pro: "Add to Home
+Screen" (added `apple-mobile-web-app-capable` etc. above) worked and
+launched chrome-free as intended, but the hamburger and gear/fullscreen
+buttons were unreachable — "under the clock and the wifi/signal/battery
+indicator." Root cause: `apple-mobile-web-app-status-bar-style:
+black-translucent` (chosen deliberately, so the dark #04060d background
+blends under the status bar instead of a hard bar splitting it off) makes
+iOS draw web content *underneath* the status bar/Dynamic Island rather
+than reserving space below it — so every `top: 14` floating control sat
+exactly where the system clock/battery icons are, unreachable. Fixed by
+adding `env(safe-area-inset-top)` to all four top-anchored elements (left
+hamburger + console panel, right gear/fullscreen row + collapsible rail)
+and `env(safe-area-inset-bottom)` to the bottom credits line (home-
+indicator clearance) — this CSS environment variable is exactly 0 on
+every browser without a notch/Dynamic Island, so it's a no-op everywhere
+except iOS standalone, verified headlessly (`calc(14px +
+env(safe-area-inset-top))` computed to exactly `14px` on desktop Chrome,
+confirming no regression) — the actual on-device fix could only be
+confirmed by the user directly, not simulated in headless testing.
+
 ### S7 — Full catalog streaming (go/no-go, unchanged, renumbered)
 
 Decision point after S6, not before — the 2.5M-star octree earns a build

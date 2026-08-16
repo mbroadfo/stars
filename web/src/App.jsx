@@ -1869,14 +1869,19 @@ export default function App() {
       <div ref={mountRef} style={{ position: "absolute", inset: 0 }} />
       <div ref={labelsRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", overflow: "hidden" }} />
 
-      {/* Left console */}
+      {/* Left console. top offsets add env(safe-area-inset-top) — in iOS
+          standalone mode (black-translucent status bar) web content draws
+          underneath the clock/battery/Dynamic Island instead of below it,
+          so a bare `top: 14` sits right under those system controls and
+          is unreachable; the env() term is 0 on everything else, so this
+          is a no-op outside iOS standalone. */}
       {!navOpen ? (
         <button onClick={() => setNavOpen(true)} title="open console"
-          style={{ position: "absolute", top: 14, left: 14, ...panel, ...mono, fontSize: 16, padding: "7px 12px", color: AMBER, cursor: "pointer" }}>
+          style={{ position: "absolute", top: "calc(14px + env(safe-area-inset-top))", left: 14, ...panel, ...mono, fontSize: 16, padding: "7px 12px", color: AMBER, cursor: "pointer" }}>
           ☰
         </button>
       ) : (
-      <div style={{ position: "absolute", top: 14, left: 14, width: 302, ...panel, padding: 0, maxHeight: "calc(100vh - 28px)", overflowY: "auto" }}>
+      <div style={{ position: "absolute", top: "calc(14px + env(safe-area-inset-top))", left: 14, width: 302, ...panel, padding: 0, maxHeight: "calc(100dvh - 28px - env(safe-area-inset-top))", overflowY: "auto" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px 10px" }}>
           <button onClick={() => setNavOpen(false)} title="collapse console"
             style={{ ...mono, fontSize: 14, padding: "3px 9px", background: "none", border: "1px solid rgba(232,180,90,0.35)", color: AMBER, borderRadius: 4, cursor: "pointer" }}>
@@ -2025,8 +2030,9 @@ export default function App() {
       )}
 
       {/* Right action rail — persistent controls, always visible regardless of console scroll state.
-          Gear button mirrors the left hamburger: collapses the whole rail to one icon. */}
-      <div style={{ position: "absolute", top: 14, right: 14, display: "flex", gap: 8, zIndex: 6 }}>
+          Gear button mirrors the left hamburger: collapses the whole rail to one icon.
+          top offset — see the left-console comment above re: iOS safe-area-inset-top. */}
+      <div style={{ position: "absolute", top: "calc(14px + env(safe-area-inset-top))", right: 14, display: "flex", gap: 8, zIndex: 6 }}>
         {document.fullscreenEnabled && (
           <button onClick={toggleFullscreen} title={isFullscreen ? "exit fullscreen" : "fullscreen (hides the browser's own address bar/controls on mobile)"}
             style={{ ...panel, ...mono, fontSize: 16, padding: "7px 12px", color: AMBER, cursor: "pointer" }}>
@@ -2039,7 +2045,7 @@ export default function App() {
         </button>
       </div>
       {railOpen && (
-      <div style={{ position: "absolute", top: 54, right: 14, width: 196, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ position: "absolute", top: "calc(54px + env(safe-area-inset-top))", right: 14, width: 196, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ ...panel, padding: "9px 10px" }}>
           <div onClick={() => setViewOpen((v) => !v)}
             style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: viewOpen ? 7 : 0 }}>
@@ -2525,7 +2531,7 @@ export default function App() {
       )}
 
       {/* Credits */}
-      <div style={{ position: "absolute", bottom: 8, right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
+      <div style={{ position: "absolute", bottom: "calc(8px + env(safe-area-inset-bottom))", right: 12, ...mono, fontSize: 9.5, color: "#3d4a68", pointerEvents: "none" }}>
         all stars are real: AT-HYG v3.2 (Gaia DR3 / Hipparcos) · far-field distance uncertainty grows with range · dashed galaxy outline is illustrative · time scrub moves only tier1 stars on real 6D velocities — far field and Sun held fixed · in flight, the epoch advances with Earth-time, not ship-time · the mission-brief tube's width is an illustrative function of γ, not a real spatial unit · the rings around it mark whole ship-years — their spacing, not their size, is the point · Travel-Time View remaps radial distance to ship-years at the current accel and never touches real positions used for measurement
       </div>
     </div>

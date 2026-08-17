@@ -955,6 +955,25 @@ visible shells render as a sparse dome instead of a solid tangle; the
 outlines toggle removes all wireframes while checkboxes and the star
 fade stay untouched.
 
+**Shipped 2026-08-16 — right-rail menu cleanup.** Four small usability
+fixes to the right-rail accordion, all user-requested in one pass: (1)
+split VIEW into two sections — VIEW now holds only camera/display
+concerns (zoom presets, Reset view, lines/names toggles, box select);
+a new VISIBILITY section holds the sky-filter chips (ALL/NAKED EYE/
+RANGE GATE) and the range slider, previously crammed into the same
+wrapped row as everything else. (2) Removed the redundant in-panel
+Fullscreen button from VIEW — the icon-only fullscreen button next to
+the gear icon (shipped during the iOS PWA work) already covers this.
+(3) `lines on`/`names on` now sit on their own dedicated row instead of
+wherever they happened to wrap to. (4) VISIBILITY is intentionally not
+gated `!shipView` like most other rail sections — the sky-mode filters
+already apply in both atlas and ship view (see the existing "filters
+apply in both modes now" comment), so hiding the panel in ship view
+would have been a regression, not a cleanup. Verified headlessly: VIEW
+panel contents no longer include "Fullscreen" or "RANGE GATE"; a new
+VISIBILITY header exists with ALL/NAKED EYE/RANGE GATE; no console
+errors switching between sections.
+
 ### S7 vs. Gaia DR3 deep field — two different "more stars," not one item
 
 - **S7 (full catalog streaming)** — the rest of *this app's existing

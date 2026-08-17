@@ -33,6 +33,19 @@ const getStarOrSun = (cat, idx) => (idx === SUN_IDX ? sunStar() : getStar(cat, i
 // render body, which has no access to that effect's closure.
 const resolveStarName = (cat, idx) =>
   (idx == null || idx === SUN_IDX) ? "Sun" : (cat.nameByIndex.get(idx)?.name ?? cat.desigByIndex?.get(idx) ?? `Star #${idx}`);
+// Coalesces a React state sync to at most once per animation frame. A
+// dragged <input type=range> fires far more "input" events per second
+// than this single giant App component can fully re-render, so calling a
+// setState directly on every event makes the slider feel like it snaps
+// between positions instead of gliding — the browser can't paint the
+// thumb as fast as events arrive. `fn` should read the current value off
+// `s` itself when it fires (not a value captured at call time), so any
+// events that land before the frame fires aren't lost, just coalesced.
+const scheduleReactSync = (s, flagKey, fn) => {
+  if (s[flagKey]) return;
+  s[flagKey] = true;
+  requestAnimationFrame(() => { s[flagKey] = false; fn(); });
+};
 // Matches a typed query against a stored Bayer/Flamsteed designation like
 // "Tau Cet" — per-token, bidirectional prefix (the stored form uses the
 // 3-letter IAU constellation abbreviation, but people type the genitive,
@@ -578,7 +591,7 @@ export default function App() {
     s.setYears = (y) => {
       s.years = Math.max(-YEARS_MAX, Math.min(YEARS_MAX, y));
       s.yearsPlaying = false; setYearsPlaying(false);
-      setYears(s.years);
+      scheduleReactSync(s, "_yearsRafPending", () => setYears(s.years));
     };
     s.setYearsPlaying = (p) => {
       if (p && s.years >= YEARS_MAX) s.years = -YEARS_MAX; // replay the full sweep
@@ -609,7 +622,7 @@ export default function App() {
       const max = s.infectionRun?.maxEpoch ?? 0;
       s.infectionEpoch = Math.max(0, Math.min(max, e));
       s.infectionEpochPlaying = false; setInfectionEpochPlaying(false);
-      setInfectionEpoch(s.infectionEpoch);
+      scheduleReactSync(s, "_infEpochRafPending", () => setInfectionEpoch(s.infectionEpoch));
     };
     s.setInfectionEpochPlaying = (p) => {
       const max = s.infectionRun?.maxEpoch ?? 0;

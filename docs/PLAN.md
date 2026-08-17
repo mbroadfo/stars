@@ -974,6 +974,40 @@ panel contents no longer include "Fullscreen" or "RANGE GATE"; a new
 VISIBILITY header exists with ALL/NAKED EYE/RANGE GATE; no console
 errors switching between sections.
 
+**Fixed 2026-08-17 — TIME slider felt like it moved in increments, not
+smoothly.** Root cause wasn't the slider's `step` (100 out of a 200,000-yr
+range is effectively sub-pixel-continuous) — it was that this whole app
+is one ~2,500-line component, and `s.setYears`/`s.setInfectionEpoch`
+called their React `setState` synchronously on every native "input"
+event a dragged `<input type=range>` fires. A fast drag fires far more
+events per second than a full re-render of a component this size can
+keep up with, so the browser had to queue events and the visible thumb
+position jumped in bursts whenever a render finally completed — not a
+real quantization problem, a rendering-throughput one. Fixed with a
+small `scheduleReactSync(s, flagKey, fn)` helper: the imperative side
+(`s.years`/`s.infectionEpoch`, read every frame by `animate()` and by
+picking/labels/shaders regardless of React) still updates synchronously
+on every event exactly as before, but the React `setState` call that
+drives the *controlled input's visible value* is coalesced to at most
+once per animation frame — any events landing inside that frame just
+update `s.years` again before the pending callback fires, so nothing is
+lost, only batched. Applied to both `s.setYears` (the reported bug) and
+`s.setInfectionEpoch` (identical pre-existing pattern, same fix). Verified
+headlessly: a burst of 40 synthetic drag events dispatched inside one
+synchronous loop shows the DOM value pinned at its pre-drag value for the
+*entire* burst (proof the coalescing engages) and lands on the exact
+final value once the browser gets a frame to breathe; play/pause and the
+preset buttons still behave identically to before. One dead end during
+verification worth noting for future headless work: `requestAnimationFrame`
+does not reliably fire while an async `page.evaluate()` call is still
+pending under Puppeteer/CDP — always dispatch events in one `evaluate()`
+call, `await` the wait in the outer Node context, then read state back in
+a separate `evaluate()` call, or rAF-dependent code will falsely appear
+broken. A second false alarm during the same verification: a cached DOM
+element handle can go stale across an `await` if React legitimately
+remounts that node between renders — re-query fresh rather than trusting
+a reference held across a gap.
+
 ### S7 vs. Gaia DR3 deep field — two different "more stars," not one item
 
 - **S7 (full catalog streaming)** — the rest of *this app's existing

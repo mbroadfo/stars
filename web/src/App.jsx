@@ -2221,14 +2221,8 @@ export default function App() {
                     ↺ Reset view
                   </button>
                 )}
-                {document.fullscreenEnabled && (
-                  <button onClick={toggleFullscreen} title="hides the browser's own address bar/controls on mobile"
-                    style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
-                      background: isFullscreen ? "rgba(232,180,90,0.28)" : "rgba(232,180,90,0.1)",
-                      border: `1px solid rgba(232,180,90,${isFullscreen ? 0.7 : 0.35})`, color: "#e8c88a" }}>
-                    {isFullscreen ? "⤢ Exit fullscreen" : "⛶ Fullscreen"}
-                  </button>
-                )}
+              </div>
+              <div style={{ display: "flex", gap: 5, marginTop: 5 }}>
                 <button onClick={() => setShowLines(!showLines)}
                   style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
                     background: showLines ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
@@ -2241,6 +2235,35 @@ export default function App() {
                     border: `1px solid rgba(143,165,216,${showNames ? 0.6 : 0.25})`, color: "#aebde0" }}>
                   names {showNames ? "on" : "off"}
                 </button>
+              </div>
+              {!shipView && (
+                <div style={{ marginTop: 5 }}>
+                  <button onClick={() => setBoxSelectOn((v) => !v)} title="drag a box to list stars in it, nearest or brightest first"
+                    style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
+                      background: boxSelectOn ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
+                      border: `1px solid rgba(143,165,216,${boxSelectOn ? 0.6 : 0.25})`, color: "#aebde0" }}>
+                    ⬚ box select
+                  </button>
+                </div>
+              )}
+              {boxSelectOn && !shipView && (
+                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
+                  drag a box over the sky to list every star in it, even faint ones
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div style={{ ...panel, padding: "9px 10px" }}>
+          <div onClick={() => toggleRailSection("visibility")}
+            style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none", marginBottom: railSection === "visibility" ? 7 : 0 }}>
+            <span style={{ ...mono, fontSize: 9, color: AMBER, letterSpacing: "0.16em" }}>VISIBILITY</span>
+            <span style={{ ...mono, fontSize: 10, color: "#8fa0c0" }}>{railSection === "visibility" ? "▾" : "▸"}</span>
+          </div>
+          {railSection === "visibility" && (
+            <>
+              <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
                 {[["all", "ALL"], ["eye", "NAKED EYE"], ["gate", "RANGE GATE"]].map(([k, label]) => (
                   <button key={k} onClick={() => setSkyMode(k)}
                     style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
@@ -2249,20 +2272,7 @@ export default function App() {
                     {label}
                   </button>
                 ))}
-                {!shipView && (
-                  <button onClick={() => setBoxSelectOn((v) => !v)} title="drag a box to list stars in it, nearest or brightest first"
-                    style={{ ...mono, fontSize: 10, padding: "4px 8px", borderRadius: 4, cursor: "pointer",
-                      background: boxSelectOn ? "rgba(143,165,216,0.22)" : "rgba(143,165,216,0.05)",
-                      border: `1px solid rgba(143,165,216,${boxSelectOn ? 0.6 : 0.25})`, color: "#aebde0" }}>
-                    ⬚ box select
-                  </button>
-                )}
               </div>
-              {boxSelectOn && !shipView && (
-                <div style={{ ...mono, fontSize: 9, color: "#5a6a8f", marginTop: 5 }}>
-                  drag a box over the sky to list every star in it, even faint ones
-                </div>
-              )}
               {skyMode === "gate" && (
                 <>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 7 }}>
